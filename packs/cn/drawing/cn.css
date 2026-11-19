@@ -1,0 +1,60 @@
+/*
+ * 中国家装施工图样式表 cn.css（约定包）。MIT 许可，见仓库根目录 LICENSE。
+ *
+ * 这里只放本项目的覆盖规则，不含 Bonsai 的默认样式。出图时 src/jiazhuang/drawset.py 的 configure_project
+ * 会读取本机已安装的 Bonsai 自带的 default.css（GPL-3.0），在它后面接上本文件，生成一份合并样式表放在
+ * 输出目录里供 Bonsai 使用。合并后的文件属于输出物，不进仓库。
+ */
+
+/* ===================== 中国家装覆盖规则 v0.1 =====================
+ * 参考：GB/T 50001-2017《房屋建筑制图统一标准》线宽组 b=0.5mm（0.7b≈0.35，0.5b=0.25，0.25b≈0.13）；
+ *       字体用长仿宋，汉字字高不小于 3.5mm，数字字母不小于 2.5mm。
+ * 数值为常用做法的起点，未逐条对照规范原文，待专业人员复核。
+ * 说明：SVG 的 1 个单位 = 图纸上 1mm；字号是字体 em 尺寸，仿宋汉字实高约 0.9em、数字约 0.7em。
+ */
+text, tspan { font-family: 'FangSong', '仿宋', 'STFangsong', 'Noto Serif CJK SC', 'SimSun', serif; font-size: 3.6px; }
+text.small, tspan.small { font-size: 3.0px; }     /* 数字 ≈2.2mm，用于点位高度等 */
+text.regular, tspan.regular { font-size: 3.6px; } /* 汉字 ≈3.2mm，数字 ≈2.5mm：尺寸、说明 */
+text.large, tspan.large { font-size: 5.0px; }     /* 汉字 ≈4.5mm：房间名 */
+text.header, tspan.header { font-size: 7.0px; }
+text.title, tspan.title { font-size: 10.0px; }
+
+/* 剖切到的墙：承重墙实心涂黑，新砌隔墙斜线填充（与拆改图约定一致） */
+.cut { stroke: black; stroke-width: 0.5; }
+.cut.material-cnbearing, .material-cnbearing.cut { fill: black; }   /* Bonsai 生成类名时会去掉材质名里的连字符 */
+.cut.material-cnpartition, .material-cnpartition.cut { fill: url(#diagonal1); }
+
+/* 投影线：0.5b；家具灰色细线 */
+.projection { stroke-width: 0.25; }
+path.outline { stroke-width: 0.25; }
+path.boundary { stroke-width: 0.2; }
+path.crease { stroke-width: 0.18; }
+path.sharp { stroke-width: 0.13; }
+path.flush { stroke-width: 0.1; }
+.IfcFurniture, .IfcFurniture path { stroke: #555555; stroke-width: 0.18; }
+.IfcDoor path, .IfcWindow path { stroke-width: 0.2; }
+.IfcCovering, .IfcCovering path { stroke: #666666; stroke-width: 0.18; }
+
+/* 水电、灯具、洁具符号 */
+.IfcOutlet, .IfcSwitchingDevice, .IfcLightFixture, .IfcSanitaryTerminal, .IfcWasteTerminal,
+.IfcOutlet path, .IfcSwitchingDevice path, .IfcLightFixture path, .IfcSanitaryTerminal path, .IfcWasteTerminal path
+  { fill: none; stroke: black; stroke-width: 0.3; }
+
+/* 标注线：0.25b */
+.annotation, .IfcAnnotation { stroke-width: 0.15; }
+.PredefinedType-DIMENSION { stroke-width: 0.13; }
+
+/* 无障碍与安防设施符号：紧急呼叫、扶手、监控 */
+.IfcAlarm, .IfcRailing, .IfcAudioVisualAppliance,
+.IfcAlarm path, .IfcRailing path, .IfcAudioVisualAppliance path
+  { fill: none; stroke: black; stroke-width: 0.3; }
+
+/* 保留的原有墙：疑似承重（≥180 或外墙）实心涂黑；其余原有墙灰色实填（不是新砌） */
+.cut.material-cnexisting, .material-cnexisting.cut { fill: #9a9a9a; stroke: black; stroke-width: 0.35; }
+
+/* 凸窗、散线窗的平面轮廓 */
+.IfcWindow.ObjectType-BAY path, .IfcWindow path { stroke-width: 0.2; }
+
+/* 拆改（v0.3）：拆除的墙画红色虚线，不填充 */
+.cut.material-cndemolish, .material-cndemolish.cut, .projection.material-cndemolish, .material-cndemolish path
+  { fill: none !important; stroke: #d00000; stroke-width: 0.35; stroke-dasharray: 1.2, 0.8; }

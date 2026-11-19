@@ -1,0 +1,22 @@
+# 真实图纸、样本和输出，永不提交
+samples-private/
+build/
+# 含个人信息的文档
+docs/private/
+# 下载的第三方安装包（不可信数据，单独存放）
+downloads/
+# 项目专用的 Blender 用户目录（装 Bonsai 等扩展）
+blender-profile/
+# 本地工具、Python 环境和缓存
+tools-bin/
+.python/
+.cache/
+.venv/
+__pycache__/
+*.pyc
+*.blend1
+*.blend2
+# 第三方源码
+third_party/
+# 出图时生成的合并样式表（含 Bonsai 的 GPL 样式，属于输出物）
+cn-combined.css

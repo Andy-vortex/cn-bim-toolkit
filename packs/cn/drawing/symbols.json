@@ -1,0 +1,137 @@
+{
+  "_说明": "中国家装平面符号库 v0.1。坐标单位 mm，局部坐标：原点在构件定位点，x 沿墙向右，y 垂直于墙指向室内。图形参照 GB/T 50786-2012《建筑电气制图标准》、GB/T 50106-2010《建筑给水排水制图标准》的常用画法简化而成，未逐条对照原文，待专业人员复核。items 支持 polyline（点列）、circle（cx, cy, r）、arc（cx, cy, r, 起始角, 终止角，单位度）、ellipse（cx, cy, rx, ry）。",
+  "types": {
+    "cn_socket": {
+      "ifc_type": "IfcOutletType", "predefined": "POWEROUTLET", "name": "五孔插座",
+      "legend": "单相二三极插座（五孔）", "default_height": 300, "body": [86, 30, 86],
+      "views": ["PLAN_VIEW"],
+      "items": [
+        {"polyline": [[-110, 30], [110, 30]]},
+        {"arc": [0, 30, 110, 0, 180]},
+        {"polyline": [[0, 140], [0, 230]]},
+        {"polyline": [[-70, 230], [70, 230]]}
+      ]
+    },
+    "cn_socket_splash": {
+      "ifc_type": "IfcOutletType", "predefined": "POWEROUTLET", "name": "防溅插座",
+      "legend": "防溅型单相二三极插座", "default_height": 1500, "body": [86, 40, 86],
+      "views": ["PLAN_VIEW"],
+      "items": [
+        {"polyline": [[-110, 30], [110, 30]]},
+        {"arc": [0, 30, 110, 0, 180]},
+        {"arc": [0, 30, 60, 0, 180]},
+        {"polyline": [[0, 140], [0, 230]]},
+        {"polyline": [[-70, 230], [70, 230]]}
+      ]
+    },
+    "cn_switch_1": {
+      "ifc_type": "IfcSwitchingDeviceType", "predefined": "TOGGLESWITCH", "name": "单联开关",
+      "legend": "单联单控开关", "default_height": 1300, "body": [86, 30, 86],
+      "views": ["PLAN_VIEW"],
+      "items": [
+        {"circle": [0, 90, 55]},
+        {"polyline": [[39, 129], [190, 280]]},
+        {"polyline": [[190, 280], [235, 235]]}
+      ]
+    },
+    "cn_switch_2": {
+      "ifc_type": "IfcSwitchingDeviceType", "predefined": "TOGGLESWITCH", "name": "双联开关",
+      "legend": "双联单控开关", "default_height": 1300, "body": [86, 30, 86],
+      "views": ["PLAN_VIEW"],
+      "items": [
+        {"circle": [0, 90, 55]},
+        {"polyline": [[39, 129], [190, 280]]},
+        {"polyline": [[190, 280], [235, 235]]},
+        {"polyline": [[150, 240], [195, 195]]}
+      ]
+    },
+    "cn_light_ceiling": {
+      "ifc_type": "IfcLightFixtureType", "predefined": "POINTSOURCE", "name": "吸顶灯",
+      "legend": "吸顶灯", "default_height": 2580, "body": [400, 400, 60], "body_centered": true,
+      "views": ["REFLECTED_PLAN_VIEW"],
+      "items": [
+        {"circle": [0, 0, 200]},
+        {"polyline": [[-141, -141], [141, 141]]},
+        {"polyline": [[-141, 141], [141, -141]]}
+      ]
+    },
+    "cn_downlight": {
+      "ifc_type": "IfcLightFixtureType", "predefined": "POINTSOURCE", "name": "筒灯",
+      "legend": "嵌入式筒灯", "default_height": 2390, "body": [90, 90, 60], "body_centered": true,
+      "views": ["REFLECTED_PLAN_VIEW"],
+      "items": [
+        {"circle": [0, 0, 75]},
+        {"circle": [0, 0, 30]}
+      ]
+    },
+    "cn_toilet": {
+      "ifc_type": "IfcSanitaryTerminalType", "predefined": "TOILETPAN", "name": "坐便器",
+      "legend": "坐便器（坑距 400）", "default_height": 0, "body": [380, 700, 400], "body_offset": [-190, 0, 0],
+      "views": ["PLAN_VIEW"],
+      "items": [
+        {"polyline": [[-220, 0], [220, 0], [220, 190], [-220, 190], [-220, 0]]},
+        {"ellipse": [0, 440, 175, 250]},
+        {"ellipse": [0, 460, 115, 175]}
+      ]
+    },
+    "cn_basin": {
+      "ifc_type": "IfcSanitaryTerminalType", "predefined": "WASHHANDBASIN", "name": "台盆",
+      "legend": "台盆柜（含龙头）", "default_height": 850, "body": [600, 480, 150], "body_offset": [-300, 0, -150],
+      "views": ["PLAN_VIEW"],
+      "items": [
+        {"polyline": [[-300, 0], [300, 0], [300, 480], [-300, 480], [-300, 0]]},
+        {"ellipse": [0, 270, 210, 150]},
+        {"circle": [0, 70, 25]}
+      ]
+    },
+    "cn_floor_drain": {
+      "ifc_type": "IfcWasteTerminalType", "predefined": "FLOORTRAP", "name": "地漏",
+      "legend": "地漏（DN50）", "default_height": 0, "body": [100, 100, 10], "body_centered": true,
+      "views": ["PLAN_VIEW"],
+      "items": [
+        {"circle": [0, 0, 70]},
+        {"polyline": [[-70, 0], [70, 0]]},
+        {"polyline": [[0, -70], [0, 70]]}
+      ]
+    },
+    "cn_bed_care": {
+      "ifc_type": "IfcFurnitureType", "predefined": "BED", "name": "护理床",
+      "legend": "护理床（1000×2100）", "default_height": 0, "body": [1000, 2100, 550], "body_offset": [-500, 0, 0],
+      "views": ["PLAN_VIEW"],
+      "items": [
+        {"polyline": [[-500, 0], [500, 0], [500, 2100], [-500, 2100], [-500, 0]]},
+        {"polyline": [[-350, 90], [350, 90], [350, 390], [-350, 390], [-350, 90]]},
+        {"polyline": [[-500, 650], [500, 650]]},
+        {"polyline": [[-500, 650], [500, 900]]}
+      ]
+    },
+    "cn_nurse_call": {
+      "ifc_type": "IfcAlarmType", "predefined": "MANUALPULLBOX", "name": "紧急呼叫按钮",
+      "legend": "紧急呼叫装置（床头按钮/卫生间拉线）", "default_height": 1000, "body": [86, 40, 86],
+      "views": ["PLAN_VIEW"],
+      "items": [
+        {"polyline": [[-120, 20], [120, 20], [120, 220], [-120, 220], [-120, 20]]},
+        {"circle": [0, 120, 55]},
+        {"polyline": [[-120, 220], [120, 20]]}
+      ]
+    },
+    "cn_grab_bar": {
+      "ifc_type": "IfcRailingType", "predefined": "HANDRAIL", "name": "无障碍扶手",
+      "legend": "无障碍扶手（L 形，水平段距地 700）", "default_height": 700, "body": [700, 80, 700],
+      "views": ["PLAN_VIEW"],
+      "items": [
+        {"polyline": [[-350, 0], [-350, 70], [350, 70], [350, 0]]},
+        {"polyline": [[-350, 40], [350, 40]]}
+      ]
+    },
+    "cn_camera": {
+      "ifc_type": "IfcAudioVisualApplianceType", "predefined": "CAMERA", "name": "视频监控",
+      "legend": "视频监控摄像机（吸顶）", "default_height": 2600, "body": [200, 120, 120], "body_centered": true,
+      "views": ["PLAN_VIEW"],
+      "items": [
+        {"polyline": [[-160, -90], [100, -90], [100, 90], [-160, 90], [-160, -90]]},
+        {"polyline": [[100, 0], [240, 80], [240, -80], [100, 0]]}
+      ]
+    }
+  }
+}

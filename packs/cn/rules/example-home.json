@@ -1,0 +1,21 @@
+{
+  "_说明": [
+    "示例规则包：演示检查引擎（src/jiazhuang/checker.py）的规则写法，可直接对示例户型（scripts/make_demo_set.py 生成的 IFC）运行。",
+    "这里的阈值都是示例值，不对应任何标准条文；给具体项目用时，请按适用的标准自行编写规则包（条文号 + 自己的概括 + 参数）。",
+    "每条规则：type 是检查类型（见 checker.CHECKS），params 是用途关键字和阈值；check 取 auto / semi / manual。"
+  ],
+  "standard": "示例规则包",
+  "title": "住宅家装自查（示例）",
+  "related": [],
+  "rules": [
+    {"id": "ex-1", "clause": "示例 1", "summary": "卧室、客厅应有外窗",
+     "check": "auto", "type": "exterior_window", "params": {"usages": ["卧室", "主卧", "次卧", "客厅", "起居"], "need_operable": false}},
+    {"id": "ex-2", "clause": "示例 2", "summary": "卫生间里的插座应为防溅型",
+     "check": "auto", "type": "wet_room_sockets", "params": {"usages": ["卫生间", "主卫", "公卫"]}},
+    {"id": "ex-3", "clause": "示例 3", "summary": "卫生间使用面积不小于 2.5 ㎡（示例值）",
+     "check": "auto", "type": "room_min_area", "params": {"usages": ["卫生间", "主卫", "公卫"], "min_m2": 2.5}},
+    {"id": "ex-4", "clause": "示例 4", "summary": "卫生间门开启净宽不小于 0.70 m（示例值，按洞口宽减 100mm 估算）",
+     "check": "auto", "type": "door_clear_width", "params": {"usages": ["卫生间", "主卫", "公卫"], "min_mm": 700, "frame_deduction_mm": 100}},
+    {"id": "ex-5", "clause": "示例 5", "summary": "插座回路、漏电保护等电气要求", "check": "manual", "note": "图上判不了，交给电气设计复核"}
+  ]
+}
