@@ -62,7 +62,7 @@ for v in (plan, mep, rcp):
 
 today = datetime.date.today().isoformat()
 legends = {
-    "JZ-02": ["cn_socket", "cn_socket_splash", "cn_switch_1", "cn_switch_2", "cn_floor_drain", "cn_toilet"],
+    "JZ-02": ["cn_socket", "cn_socket_splash", "cn_switch_1", "cn_switch_2", "cn_floor_drain"],
     "JZ-03": ["cn_light_ceiling", "cn_downlight"],
 }
 sheet_list = []

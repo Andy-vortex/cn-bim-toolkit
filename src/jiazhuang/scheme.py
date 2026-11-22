@@ -1,12 +1,13 @@
 """方案（scheme）数据格式和最简单的方案：把识别结果原样当作方案（现状平面）。
 
 方案是一个 JSON 字典，plan2ifc 和出图流程按下面的键读取（都可以缺省）：
-  rooms:   [{id, usage, orig_name, unit, unit_type, zone, public, area_m2, label:[x,y], beds?, care_type?, note?}]
+  rooms:   [{id, usage, orig_name, unit, unit_type, zone, public, area_m2, label:[x,y], beds?, care_type?, note?, type?}]
            id 对应识别结果里的房间；usage 是新用途（出图、检查都按它）；zone 是分区编号（出分图、按分区检查）；
-           label 是房名标注点（不给就取 label_point）
+           label 是房名标注点（不给就取 label_point）；type 覆盖家具布置用的房间类型（不给按房名查 room_types.json）
   zones:   [{id, ...}]         分区列表（旧方案里叫 cores）；出图时自动切的分段带 auto=True（见 split_zones），只用于出图，
                                不写进 rooms[].zone
-  items:   [{key, name, x, y, z, rot, room}]   约定包符号（symbols.json 的键）的实例：床、插座、呼叫按钮……
+  items:   [{key, name, x, y, z, rot, room, params?, plan_id?}]   约定包符号（symbols.json 的键）的实例：床、插座、呼叫按钮……；
+           键是 lib:<类型名> 或 cn_<类型> 的是家具（furniture.json；furnish 布置，params 是 cn_ 类型的尺寸参数，plan_id 是布置意图里的 id）；room 是房间 id
   after:   拆改后的识别结果（walls/rooms/openings 都换成改后的几何）；没有拆改就不给
   demolish:[{polygon, reason, from, thickness}]  被拆掉的墙块
   changes: [{type, target, detail, zone}]        拆改清单

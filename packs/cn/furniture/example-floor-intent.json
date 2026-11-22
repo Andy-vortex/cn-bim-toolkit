@@ -1,0 +1,155 @@
+{
+ "rooms": [
+  {"room": "R005", "items": [
+   {"id": "u1_sofa", "key": "cn_sofa", "wall": "W12", "align": "center"},
+   {"id": "u1_table", "key": "cn_coffee_table", "front_of": "u1_sofa", "gap": 400},
+   {"id": "u1_tv", "key": "cn_tv_cabinet", "wall": "W2", "facing": "u1_sofa"},
+   {"id": "u1_dining", "key": "lib:Neufert Residential 4-Seater Rectangular Table", "name": "餐桌", "wall": "W3", "align": "center", "offset": -525, "gap": 600}
+  ]},
+  {"room": "R003", "items": [
+   {"id": "u1_kitchen", "key": "cn_kitchen", "params": {"width": 2550, "return": 2000, "side": "right", "sink": 850, "hob": 1600}, "wall": "W3", "align": "end"},
+   {"id": "u1_fridge", "key": "lib:Generic Medium Fridge Zone", "wall": "W3", "align": "start"}
+  ]},
+  {"room": "R007", "items": [
+   {"id": "u1_bed", "key": "cn_bed", "params": {"width": 1800}, "wall": "W2", "align": "start", "offset": 500},
+   {"id": "u1_bed_l", "key": "lib:Generic Small Bedside Table", "beside": "u1_bed", "side": "left"},
+   {"id": "u1_bed_r", "key": "lib:Generic Small Bedside Table", "beside": "u1_bed", "side": "right"},
+   {"id": "u1_wardrobe", "key": "cn_wardrobe", "params": {"width": 1500}, "wall": "W4", "align": "start"}
+  ]},
+  {"room": "R006", "items": [
+   {"id": "u1_mt_toilet", "key": "lib:Neufert Toilet with Cistern", "wall": "W3", "align": "start", "offset": 150},
+   {"id": "u1_mt_shower", "key": "cn_shower", "params": {"depth": 850}, "wall": "W3", "align": "end"},
+   {"id": "u1_mt_vanity", "key": "cn_vanity", "wall": "W2", "align": "start"}
+  ]},
+  {"room": "R009", "items": [
+   {"id": "u1_b2_bed", "key": "cn_bed", "wall": "W2", "align": "start"},
+   {"id": "u1_b2_wardrobe", "key": "cn_wardrobe", "params": {"width": 1200}, "wall": "W2", "align": "end"}
+  ]},
+  {"room": "R001", "items": [
+   {"id": "u1_b3_bed", "key": "cn_bed", "params": {"width": 1000}, "wall": "W2", "align": "end"},
+   {"id": "u1_b3_wardrobe", "key": "cn_wardrobe", "params": {"width": 900}, "wall": "W4", "align": "start"}
+  ]},
+  {"room": "R008", "items": [
+   {"id": "u1_desk", "key": "lib:Generic Medium Desk", "wall": "W1", "align": "center"},
+   {"id": "u1_books", "key": "cn_bookcase", "wall": "W2", "align": "end"}
+  ]},
+  {"room": "R002", "items": [
+   {"id": "u1_t_toilet", "key": "lib:Neufert Toilet with Cistern", "wall": "W3", "align": "start", "offset": 150},
+   {"id": "u1_t_shower", "key": "cn_shower", "params": {"width": 850}, "wall": "W3", "align": "end"},
+   {"id": "u1_t_vanity", "key": "cn_vanity", "wall": "W2", "align": "start"}
+  ]},
+  {"room": "R010", "items": [
+   {"id": "u1_washer", "key": "lib:Neufert Washing Machine", "wall": "W4", "align": "center"}
+  ]},
+
+  {"room": "R014", "items": [
+   {"id": "u2_sofa", "key": "cn_sofa", "wall": "W14", "align": "end", "offset": 650},
+   {"id": "u2_table", "key": "cn_coffee_table", "front_of": "u2_sofa", "gap": 400},
+   {"id": "u2_tv", "key": "cn_tv_cabinet", "params": {"width": 1600}, "wall": "W2", "facing": "u2_sofa"},
+   {"id": "u2_dining", "key": "lib:Neufert Residential 4-Seater Rectangular Table", "name": "餐桌", "wall": "W9", "align": "center", "offset": 600, "gap": 400}
+  ]},
+  {"room": "R011", "items": [
+   {"id": "u2_kitchen", "key": "cn_kitchen", "params": {"width": 3150, "return": 2000, "side": "right", "sink": 1600, "hob": 750}, "wall": "W3", "align": "end"},
+   {"id": "u2_fridge", "key": "lib:Generic Medium Fridge Zone", "wall": "W1", "align": "start"}
+  ]},
+  {"room": "R016", "items": [
+   {"id": "u2_bed", "key": "cn_bed", "params": {"width": 1800}, "wall": "W2", "align": "start", "offset": 500},
+   {"id": "u2_bed_l", "key": "lib:Generic Small Bedside Table", "beside": "u2_bed", "side": "left"},
+   {"id": "u2_bed_r", "key": "lib:Generic Small Bedside Table", "beside": "u2_bed", "side": "right"},
+   {"id": "u2_wardrobe", "key": "cn_wardrobe", "wall": "W3", "align": "start"}
+  ]},
+  {"room": "R017", "items": [
+   {"id": "u2_mt_shower", "key": "cn_shower", "wall": "W3", "align": "start"},
+   {"id": "u2_mt_toilet", "key": "lib:Neufert Toilet with Cistern", "wall": "W4", "align": "center", "offset": 100},
+   {"id": "u2_mt_vanity", "key": "cn_vanity", "wall": "W1", "align": "end"}
+  ]},
+  {"room": "R015", "items": [
+   {"id": "u2_b2_bed", "key": "cn_bed", "wall": "W4", "align": "center"},
+   {"id": "u2_b2_wardrobe", "key": "cn_wardrobe", "params": {"width": 1500}, "wall": "W3", "align": "end"}
+  ]},
+  {"room": "R013", "items": [
+   {"id": "u2_t_shower", "key": "cn_shower", "wall": "W3", "align": "end"},
+   {"id": "u2_t_toilet", "key": "lib:Neufert Toilet with Cistern", "wall": "W4", "align": "end", "offset": 150},
+   {"id": "u2_t_vanity", "key": "cn_vanity", "wall": "W1", "align": "end"}
+  ]},
+  {"room": "R018", "items": [
+   {"id": "u2_washer", "key": "lib:Neufert Washing Machine", "wall": "W4", "align": "center"}
+  ]},
+
+  {"room": "R021", "items": [
+   {"id": "u3_sofa", "key": "cn_sofa", "wall": "W2", "align": "start", "offset": 600},
+   {"id": "u3_table", "key": "cn_coffee_table", "front_of": "u3_sofa", "gap": 400},
+   {"id": "u3_tv", "key": "cn_tv_cabinet", "params": {"width": 1600}, "wall": "W6", "facing": "u3_sofa"},
+   {"id": "u3_dining", "key": "lib:Neufert Residential 4-Seater Rectangular Table", "name": "餐桌", "wall": "W3", "align": "start", "offset": 800, "gap": 400}
+  ]},
+  {"room": "R019", "items": [
+   {"id": "u3_kitchen", "key": "cn_kitchen", "params": {"width": 2850, "return": 2000, "side": "left", "sink": 1400, "hob": 2300}, "wall": "W3", "align": "start"},
+   {"id": "u3_fridge", "key": "lib:Generic Medium Fridge Zone", "wall": "W1", "align": "end"}
+  ]},
+  {"room": "R023", "items": [
+   {"id": "u3_bed", "key": "cn_bed", "params": {"width": 1800}, "wall": "W4", "align": "end", "offset": 500},
+   {"id": "u3_bed_l", "key": "lib:Generic Small Bedside Table", "beside": "u3_bed", "side": "left"},
+   {"id": "u3_bed_r", "key": "lib:Generic Small Bedside Table", "beside": "u3_bed", "side": "right"},
+   {"id": "u3_wardrobe", "key": "cn_wardrobe", "params": {"width": 2000}, "wall": "W3", "align": "end"}
+  ]},
+  {"room": "R024", "items": [
+   {"id": "u3_mt_shower", "key": "cn_shower", "wall": "W3", "align": "end"},
+   {"id": "u3_mt_toilet", "key": "lib:Neufert Toilet with Cistern", "wall": "W2", "align": "center", "offset": -100},
+   {"id": "u3_mt_vanity", "key": "cn_vanity", "wall": "W1", "align": "start"}
+  ]},
+  {"room": "R022", "items": [
+   {"id": "u3_b2_bed", "key": "cn_bed", "wall": "W2", "align": "center"},
+   {"id": "u3_b2_wardrobe", "key": "cn_wardrobe", "params": {"width": 1500}, "wall": "W3", "align": "start"}
+  ]},
+  {"room": "R020", "items": [
+   {"id": "u3_t_toilet", "key": "lib:Neufert Toilet with Cistern", "wall": "W3", "align": "center"},
+   {"id": "u3_t_shower", "key": "cn_shower", "wall": "W2", "align": "start"},
+   {"id": "u3_t_vanity", "key": "cn_vanity", "wall": "W1", "align": "start"}
+  ]},
+  {"room": "R025", "items": [
+   {"id": "u3_washer", "key": "lib:Neufert Washing Machine", "wall": "W4", "align": "center"}
+  ]},
+
+  {"room": "R030", "items": [
+   {"id": "u4_sofa", "key": "cn_sofa", "wall": "W2", "align": "center"},
+   {"id": "u4_table", "key": "cn_coffee_table", "front_of": "u4_sofa", "gap": 400},
+   {"id": "u4_tv", "key": "cn_tv_cabinet", "wall": "W12", "facing": "u4_sofa"},
+   {"id": "u4_dining", "key": "lib:Neufert Residential 4-Seater Rectangular Table", "name": "餐桌", "wall": "W11", "align": "center", "offset": 525, "gap": 600}
+  ]},
+  {"room": "R028", "items": [
+   {"id": "u4_kitchen", "key": "cn_kitchen", "params": {"width": 2550, "return": 2000, "side": "left", "sink": 1700, "hob": 950}, "wall": "W3", "align": "start"},
+   {"id": "u4_fridge", "key": "lib:Generic Medium Fridge Zone", "wall": "W3", "align": "end"}
+  ]},
+  {"room": "R032", "items": [
+   {"id": "u4_bed", "key": "cn_bed", "params": {"width": 1800}, "wall": "W4", "align": "center"},
+   {"id": "u4_bed_l", "key": "lib:Generic Small Bedside Table", "beside": "u4_bed", "side": "left"},
+   {"id": "u4_bed_r", "key": "lib:Generic Small Bedside Table", "beside": "u4_bed", "side": "right"},
+   {"id": "u4_wardrobe", "key": "cn_wardrobe", "params": {"width": 1500}, "wall": "W2", "align": "end"}
+  ]},
+  {"room": "R031", "items": [
+   {"id": "u4_mt_toilet", "key": "lib:Neufert Toilet with Cistern", "wall": "W3", "align": "end", "offset": 150},
+   {"id": "u4_mt_shower", "key": "cn_shower", "params": {"depth": 850}, "wall": "W3", "align": "start"},
+   {"id": "u4_mt_vanity", "key": "cn_vanity", "wall": "W4", "align": "end"}
+  ]},
+  {"room": "R034", "items": [
+   {"id": "u4_b2_bed", "key": "cn_bed", "wall": "W4", "align": "end"},
+   {"id": "u4_b2_wardrobe", "key": "cn_wardrobe", "params": {"width": 1200}, "wall": "W4", "align": "start"}
+  ]},
+  {"room": "R026", "items": [
+   {"id": "u4_b3_bed", "key": "cn_bed", "params": {"width": 1000}, "wall": "W4", "align": "start"},
+   {"id": "u4_b3_wardrobe", "key": "cn_wardrobe", "params": {"width": 900}, "wall": "W2", "align": "end"}
+  ]},
+  {"room": "R033", "items": [
+   {"id": "u4_desk", "key": "lib:Generic Medium Desk", "wall": "W1", "align": "center"},
+   {"id": "u4_books", "key": "cn_bookcase", "wall": "W4", "align": "start"}
+  ]},
+  {"room": "R027", "items": [
+   {"id": "u4_t_toilet", "key": "lib:Neufert Toilet with Cistern", "wall": "W3", "align": "end", "offset": 150},
+   {"id": "u4_t_shower", "key": "cn_shower", "params": {"width": 850}, "wall": "W3", "align": "start"},
+   {"id": "u4_t_vanity", "key": "cn_vanity", "wall": "W4", "align": "end"}
+  ]},
+  {"room": "R035", "items": [
+   {"id": "u4_washer", "key": "lib:Neufert Washing Machine", "wall": "W4", "align": "center"}
+  ]}
+ ]
+}

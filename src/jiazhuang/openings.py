@@ -22,29 +22,36 @@
 JZ_Opening.SillSource == "默认值" 的注明待实测。洞口宽：OverallWidth，没有就用构件投影在墙方向上的宽度。
 
 几何（门窗的墙面法线、所在房间、外墙朝向）都从 IFC 几何算，单位：米（世界坐标），和 Blender 场景一致。
+门窗本身和平开门扫过的地方（opening_zones）是纯几何：出图避让（annotate）和家具校验（furnish，识别结果的毫米坐标）共用这一份。
 """
 from __future__ import annotations
 
 import collections
 import importlib
+import math
 import re
 
-import ifcopenshell
-import ifcopenshell.api as api
-import ifcopenshell.geom
-import ifcopenshell.util.element as uel
-import ifcopenshell.util.placement as upl
-import ifcopenshell.util.unit as uu
 import numpy as np
 import shapely
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
+try:   # 家具校验器（furnish）在没有 ifcopenshell 的 .venv 里只用纯几何的 opening_zones、rec_opening_zones
+    import ifcopenshell
+    import ifcopenshell.api as api
+    import ifcopenshell.geom
+    import ifcopenshell.util.element as uel
+    import ifcopenshell.util.placement as upl
+    import ifcopenshell.util.unit as uu
+except ImportError:
+    ifcopenshell = None
+
 from . import conventions, markcode
 from .printing import log
 
-for _m in ("root", "type"):
-    importlib.import_module("ifcopenshell.api." + _m)
+if ifcopenshell is not None:
+    for _m in ("root", "type"):
+        importlib.import_module("ifcopenshell.api." + _m)
 
 # 约定包 conventions.json 的 openings 一节：和别的模块一样在导入时读（入口脚本先用 conventions.check_pack 查约定包，再导入本模块）
 _CONV = conventions.get("openings")
@@ -64,8 +71,74 @@ CIRCULATION = tuple(_CONV["circulation_words"])
 _GRADE_ORDER = {g: i for i, g in enumerate(sorted(_CONV["fire"]["grade_minutes"], key=lambda g: -_CONV["fire"]["grade_minutes"][g]))}
 _grade_key = lambda g: _GRADE_ORDER.get(g or "", len(_GRADE_ORDER)) if g is not None else -1
 
-_GS = ifcopenshell.geom.settings()
-_GS.set("use-world-coords", True)
+if ifcopenshell is not None:
+    _GS = ifcopenshell.geom.settings()
+    _GS.set("use-world-coords", True)
+
+
+# ------------------------------------------------------------------ 门窗占的地方（纯几何）
+def oriented_box(cx, cy, ux, uy, half_u, half_n):
+    """以 (cx, cy) 为中心、沿 u 半长 half_u、沿法线半宽 half_n 的矩形。"""
+    nx, ny = -uy, ux
+    return Polygon([(cx + sx * ux * half_u + sy * nx * half_n, cy + sx * uy * half_u + sy * ny * half_n)
+                    for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))])
+
+
+_LEAF_SWING = ("SINGLE_SWING_LEFT", "SINGLE_SWING_RIGHT", "DOUBLE_SWING_LEFT", "DOUBLE_SWING_RIGHT")
+
+
+def opening_zones(c, u, n, w, t, op=None, pad=0.02):
+    """门窗本身占的地方（墙厚范围内的洞口，四周放出 pad）+ 平开门扫过的地方：[洞口, 扇形…]。单位跟着输入（出图用米，
+    pad 0.02；家具校验用毫米，pad 20）。c 墙中线上的洞口中心，u 沿墙，n 门扇开向的一侧（numpy 单位向量），w 洞宽，t 墙厚，
+    op 门的 OperationType（窗为 None）。门扇向 +n 开，铰链在墙面上（ifcopenshell 参数化门的约定：单扇 LEFT 铰链在 -u 端、
+    RIGHT 在 +u 端；双扇两头各一扇）：单扇、双扇平开门按扇形算（扇形外的角上能放字），其余开启方式按整块矩形算。"""
+    zones = [oriented_box(c[0], c[1], u[0], u[1], w / 2 + pad, t / 2 + pad)]
+    if op is not None:
+        face = c + n * (t / 2)
+
+        def sector(h, d, r):   # 铰链 h，门扇关着时朝 d，开到 +n
+            return Polygon([tuple(h)] + [tuple(h + r * (math.cos(a) * d + math.sin(a) * n)) for a in np.linspace(0.0, math.pi / 2, 10)])
+        if op == "SINGLE_SWING_LEFT":
+            zones.append(sector(face - u * w / 2, u, w))
+        elif op == "SINGLE_SWING_RIGHT":
+            zones.append(sector(face + u * w / 2, -u, w))
+        elif op in ("DOUBLE_DOOR_SINGLE_SWING", "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_LEFT", "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_RIGHT"):
+            zones += [sector(face - u * w / 2, u, w / 2), sector(face + u * w / 2, -u, w / 2)]
+        else:
+            leaf = w if op in _LEAF_SWING else (w / 2 if op.startswith("DOUBLE_DOOR") and "SWING" in op else 0.0)
+            if leaf:
+                cc = c + n * (t / 2 + leaf / 2)
+                zones.append(oriented_box(cc[0], cc[1], u[0], u[1], w / 2, leaf / 2))
+    return zones
+
+
+def rec_door(o: dict) -> tuple[float, str]:
+    """识别结果（dxfplan）里的一樘门 → (IFC 门的转角, OperationType)。转角让局部 +y 指向开启一侧（swing=-1 时转 180°）；
+    leafs 0 推拉、2 双扇平开，单扇看铰链在哪端。plan2ifc 建门和家具校验算门扇用的是这一份。"""
+    s = o.get("swing", 1) or 1
+    rot = o["rot"] + (180.0 if s < 0 else 0.0)
+    leafs = o.get("leafs", 1)
+    op = ("SLIDING_TO_LEFT" if leafs == 0 else "DOUBLE_DOOR_SINGLE_SWING" if leafs >= 2
+          else "SINGLE_SWING_LEFT" if o.get("hinge_end", -1) * s < 0 else "SINGLE_SWING_RIGHT")
+    return rot, op
+
+
+def rec_frame(o: dict) -> tuple:
+    """识别结果的门窗（不含凸窗）→ (c, u, n, w, t, op)，毫米、图纸坐标；门的 n 是开启一侧，窗的 op 为 None。"""
+    if o["kind"] == "door":
+        rot, op = rec_door(o)
+    else:
+        rot, op = o["rot"] + (180.0 if o.get("sy", 1) < 0 else 0.0), None
+    u = np.array([math.cos(math.radians(rot)), math.sin(math.radians(rot))])
+    return np.array([float(o["x"]), float(o["y"])]), u, np.array([-u[1], u[0]]), float(o["width"]), float(o["wall_t"] or 200.0), op
+
+
+def rec_opening_zones(o: dict) -> list:
+    """识别结果的门窗占的地方（毫米）：和出图时从 IFC 算的（annotate._opening_zone）是同一个函数；凸窗是它的轮廓。"""
+    if o.get("polygon"):
+        return [Polygon(o["polygon"]).buffer(0)]
+    c, u, n, w, t, op = rec_frame(o)
+    return opening_zones(c, u, n, w, t, op, pad=20.0)
 
 
 # ------------------------------------------------------------------ 属性
@@ -300,7 +373,7 @@ def assign_marks_file(path: str) -> list[dict]:
 class PlanGeometry:
     """平面几何缓存：构件投影轮廓、建筑外轮廓、门窗的墙面坐标系。供编号定位、尺寸、门窗表共用。"""
 
-    SOFT = ("IfcFurniture", "IfcFurnishingElement", "IfcSanitaryTerminal", "IfcOutlet", "IfcSwitchingDevice", "IfcAlarm",
+    SOFT = ("IfcFurniture", "IfcFurnishingElement", "IfcSanitaryTerminal", "IfcElectricAppliance", "IfcOutlet", "IfcSwitchingDevice", "IfcAlarm",
             "IfcRailing", "IfcAudioVisualAppliance", "IfcLightFixture", "IfcWasteTerminal", "IfcStair", "IfcStairFlight")
 
     def __init__(self, f: ifcopenshell.file):

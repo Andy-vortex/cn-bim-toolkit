@@ -1,0 +1,17 @@
+{
+ "rooms": [
+  {"room": "客厅", "items": [
+   {"id": "sofa", "key": "cn_sofa", "params": {"width": 2400}, "wall": "W3", "align": "center"},
+   {"id": "table", "key": "cn_coffee_table", "front_of": "sofa", "gap": 400},
+   {"id": "tv", "key": "cn_tv_cabinet", "wall": "W1", "facing": "sofa"},
+   {"id": "chair", "key": "lib:Generic 1-Seater Sofa", "wall": "W4", "facing": "table"}
+  ]},
+  {"room": "卫生间", "items": [
+   {"id": "toilet", "key": "lib:Neufert Toilet with Cistern", "wall": "W3", "align": "start", "offset": 150},
+   {"id": "vanity", "key": "cn_vanity", "wall": "W4", "align": "start", "offset": 150}
+  ]},
+  {"room": "玄关", "items": [
+   {"id": "shoes", "key": "cn_shoe_cabinet", "wall": "W2", "align": "end"}
+  ]}
+ ]
+}

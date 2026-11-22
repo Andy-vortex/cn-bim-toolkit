@@ -7,8 +7,11 @@
   识别结果没有门窗高度：原图编号（如 FM乙1121、TC1818）的宽度位与洞口宽相差 ≤1dm 的才采用，写进 JZ_Opening.Label
   （openings 编号时优先用它做 Tag），高度取编号后两位；否则用默认值。来源记在 JZ_Opening.HeightSource（"原图编号"/"默认值"），
   门窗表据此注明"待实测"；对不上的原图编号不采用，备注写进 JZ_Opening.LabelNote。防火门类代号（FM/FD/FH）记防火等级。
-  默认高度、窗台高取约定包 conventions.json；识别结果没有窗台高，窗都记 JZ_Opening.SillSource="默认值"。
+  默认高度、窗台高取约定包 conventions.json；识别结果带窗台高（sill）的用它，记 JZ_Opening.SillSource="识别结果"，否则记"默认值"。
 - 床和设施：约定包的符号类型（symbols.json），实例放进所在的 IfcSpace。
+- 家具（方案 items 里键在 furniture.json 里的，place_item）：lib:<类型名> 运行时用 project.append_asset 从 Bonsai 自带的家具库
+  引进类型，同一类型只引一次；库的插入点各不相同，按类型的三维外包和 furniture.json 写的靠墙边归一到"靠墙边中点、局部 +y
+  指向室内"（furnish.lib_frame）。cn_<类型> 由 furngen 按参数生成，同参数只建一次。
 - 一个标准层代表多层时：楼层放在第一个标高上，全部标高写在 JZ_Storey.Levels_m 里，规范检查按最高标高判。
 """
 from __future__ import annotations
@@ -21,9 +24,13 @@ import os
 import numpy as np
 import ifcopenshell
 import ifcopenshell.api as api
+import ifcopenshell.geom
 
 from . import conventions
+from . import furngen
+from . import furnish
 from . import markcode
+from . import openings
 from . import scheme
 from .printing import log
 from . import symbols as sym
@@ -79,6 +86,51 @@ def _curve2d(f, ctx, rings):
 def _pset(f, product, name, props):
     p = api.pset.add_pset(f, product=product, name=name)
     api.pset.edit_pset(f, pset=p, properties=props)
+
+
+def lib_bbox(occ) -> tuple:
+    """构件在自身局部坐标里的三维外包（毫米）：(x0, y0, z0, x1, y1, z1)。库类型的插入点不统一，靠它归一。"""
+    sh = ifcopenshell.geom.create_shape(ifcopenshell.geom.settings(), occ)
+    v = np.array(sh.geometry.verts, dtype=float).reshape(-1, 3) / M
+    return tuple(float(a) for a in (*v.min(0), *v.max(0)))
+
+
+def place_item(f, cache, it, x, y, z, container):
+    """方案里一件家具（键 lib:<库类型名> 或 cn_<参数化类型>）摆到 (x, y)（靠墙边中点，已减过偏移）：
+    库类型运行时从 Bonsai 家具库引进、按外包归一；参数化类型由 furngen 按参数生成。同一类型同参数只建一次（cache 里记着）。
+    实例写 JZ_Furniture.Placement（固定/活动）：小比例总图只画洁具和固定家具。"""
+    key, spec = it["key"], furnish.TYPES[it["key"]]
+    if key.startswith("lib:"):
+        if "lib" not in cache:
+            cache["lib"] = ifcopenshell.open(furnish.library_path())
+        if key not in cache:
+            src = next((t for t in cache["lib"].by_type("IfcTypeProduct") if t.Name == key[4:]), None)
+            if src is None:
+                raise KeyError(f"家具库里没有类型 {key[4:]}（{furnish.library_path()}）")
+            cache[key] = [api.project.append_asset(f, library=cache["lib"], element=src), None]
+        ck = key
+    else:
+        params = furnish.resolve(key, it.get("params"))
+        ck = key + json.dumps(params, sort_keys=True)
+        if ck not in cache:
+            g = furnish.geom(key, params)
+            name = f"{spec['name']} {g['width']:.0f}×{g['depth']:.0f}" + (f" 转角{params['return']:.0f}" if params.get("return") else "")
+            cache[ck] = [furngen.create_type(f, spec, params, name), "cn"]
+    t = cache[ck][0]
+    occ = api.root.create_entity(f, ifc_class=t.is_a()[:-4], name=it["name"])
+    api.type.assign_type(f, related_objects=[occ], relating_type=t)
+    extra, (bx, by) = 0.0, (0.0, 0.0)
+    if key.startswith("lib:"):
+        if cache[ck][1] is None:
+            cache[ck][1] = lib_bbox(occ)
+        extra, (bx, by) = furnish.lib_frame(cache[ck][1], spec["back"])
+    a = math.radians(it["rot"] + extra)
+    api.geometry.edit_object_placement(f, product=occ, matrix=_matrix(x - (math.cos(a) * bx - math.sin(a) * by),
+                                                                       y - (math.sin(a) * bx + math.cos(a) * by), z, it["rot"] + extra))
+    api.spatial.assign_container(f, relating_structure=container, products=[occ])
+    fixed = spec.get("fixed") or t.is_a("IfcSanitaryTerminalType")
+    _pset(f, occ, "JZ_Furniture", {"Key": key, "Placement": "固定" if fixed else "活动"})
+    return occ
 
 
 def _orig_label(o: dict, width: float, width0: float | None = None):
@@ -256,11 +308,7 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
         t = float(o["wall_t"] or 200.0)
         if o["kind"] == "door":
             # 局部 +y = 开启一侧（ifcopenshell 门的约定：门框占 y∈[0,t]，门扇向 +y 开；LEFT 铰链在 x=0，RIGHT 在 x=宽）
-            s_ = o.get("swing", 1) or 1
-            rot = o["rot"] + (180.0 if s_ < 0 else 0.0)
-            leafs = o.get("leafs", 1)
-            op = ("SLIDING_TO_LEFT" if leafs == 0 else "DOUBLE_DOOR_SINGLE_SWING" if leafs >= 2
-                  else "SINGLE_SWING_LEFT" if o.get("hinge_end", -1) * s_ < 0 else "SINGLE_SWING_RIGHT")
+            rot, op = openings.rec_door(o)
         else:
             rot = o["rot"] + (180.0 if o["sy"] < 0 else 0.0)
         ux, uy = math.cos(math.radians(rot)), math.sin(math.radians(rot))
@@ -299,11 +347,12 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
                 rep = api.geometry.add_window_representation(f, context=ctx, overall_height=lab_h or WIN_H, overall_width=w,
                                                              partition_type="SINGLE_PANEL", lining_properties=lining)
                 api.geometry.assign_representation(f, product=e, representation=rep)
-            api.geometry.edit_object_placement(f, product=e, matrix=_matrix(ox_, oy_, z0 + WIN_SILL, rot))
+            sill = float(o["sill"]) if o.get("sill") is not None else WIN_SILL
+            api.geometry.edit_object_placement(f, product=e, matrix=_matrix(ox_, oy_, z0 + sill, rot))
             contain(e)
             _pset(f, e, "Pset_WindowCommon", {"IsExternal": bool(o["exterior"])})
             _pset(f, e, "JZ_Opening", dict({"Kind": "窗", "Operable": "未知", "Rooms": rooms, "Source": o["block"],
-                                            "HeightSource": hsrc, "SillSource": "默认值"}, **jz_lab))
+                                            "HeightSource": hsrc, "SillSource": "识别结果" if o.get("sill") is not None else "默认值"}, **jz_lab))
             zone(e, o["x"])
             n_win += 1
 
@@ -321,12 +370,16 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
         _pset(f, grid, "JZ_Grid", {"BubbleEnds": json.dumps({k: {a["label"]: a["ends"] for a in axes[k]} for k in ("x", "y")}, ensure_ascii=False),
                                    "Source": "原图 DOTE 层轴线 + _AXISO 轴号"})
 
-    # 床和设施
+    # 床和设施：约定包符号的类型；家具（furniture.json 的键）见 place_item
     types = sym.create_types(f, sym.load_pack(pack_symbols))
+    furn = {}
     n_item = 0
     for it in sch["items"]:
-        occ = sym.place_occurrence(f, types, it["key"], it["name"], it["x"] - OX, it["y"] - OY, z0 + it["z"], it["rot"],
-                                   container=spaces.get(it["room"], storey))
+        where = spaces.get(it["room"], storey)
+        if it["key"] in furnish.TYPES:
+            occ = place_item(f, furn, it, it["x"] - OX, it["y"] - OY, z0 + it["z"], where)
+        else:
+            occ = sym.place_occurrence(f, types, it["key"], it["name"], it["x"] - OX, it["y"] - OY, z0 + it["z"], it["rot"], container=where)
         zone(occ, it["x"])
         n_item += 1
 

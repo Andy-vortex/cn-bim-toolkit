@@ -4,24 +4,44 @@
 - 外墙 200 厚，材质 cn-bearing（按承重墙画法：实心涂黑）；
 - 隔墙 100 厚，材质 cn-partition（按新砌隔墙画法：斜线填充）。
 门窗用 ifcopenshell 的参数化门窗（注意：门窗接口用项目单位毫米，墙接口用米）。
-水电点位、灯具、洁具都用 symbols.py 的类型，图上自动出国标习惯符号。
+水电点位、灯具用 symbols.py 的类型，图上自动出国标习惯符号；家具和洁具按示例布置意图（packs/cn/furniture/example-intent.json）摆。
+recognition() 把同一套墙、门窗、房间写成识别结果的格式（dxfplan 的输出），家具布置（furnish）和 make_plan_set 能直接用：
+  python -m jiazhuang.demo_apartment <识别.json>
 """
 from __future__ import annotations
 
 import importlib
+import json
 import math
+import os
 
 import numpy as np
-import ifcopenshell
-import ifcopenshell.api as api
 
-from . import symbols as sym
-
-for _m in ("project", "root", "unit", "context", "aggregate", "geometry", "spatial", "feature", "material", "pset"):
-    importlib.import_module("ifcopenshell.api." + _m)
+try:   # 建 IFC（build）在 Blender 里跑；recognition() 只要 shapely，.venv 里也能跑
+    import ifcopenshell
+    import ifcopenshell.api as api
+    from . import symbols as sym
+    for _m in ("project", "root", "unit", "context", "aggregate", "geometry", "spatial", "feature", "material", "pset"):
+        importlib.import_module("ifcopenshell.api." + _m)
+except ImportError:
+    ifcopenshell = None
 
 M = 0.001
 H = 2800  # 层高（结构顶）毫米
+# 墙（轴线坐标，毫米）：名称、起点、终点、厚、材质
+WALLS = (("外墙-南", (0, 100), (6800, 100), 200, "cn-bearing"),
+         ("外墙-北", (6800, 3900), (0, 3900), 200, "cn-bearing"),
+         ("外墙-东", (6700, 200), (6700, 3800), 200, "cn-bearing"),
+         ("外墙-西", (100, 3800), (100, 200), 200, "cn-bearing"),
+         ("隔墙-客厅/卫生间", (4600, 200), (4600, 3800), 100, "cn-partition"),
+         ("隔墙-卫生间/玄关", (4650, 2000), (6600, 2000), 100, "cn-partition"))
+# 门：所在墙、洞口起点离墙起点、宽、名称、开启方式（门扇开向墙方向的左侧）；窗：所在墙、起点、宽、高、窗台、名称
+DOORS = (("外墙-南", 5200, 900, "入户门 M1", "SINGLE_SWING_LEFT"),
+         ("隔墙-客厅/卫生间", 800, 900, "客厅门 M2", "SINGLE_SWING_RIGHT"),
+         ("隔墙-卫生间/玄关", 300, 700, "卫生间门 M3", "SINGLE_SWING_LEFT"))
+WINDOWS = (("外墙-西", 900, 1800, 1500, 900, "客厅窗 C1"),
+           ("外墙-北", 900, 900, 600, 1500, "卫生间高窗 C2"))
+SPACES = (("客厅", 200, 200, 4550, 3800), ("卫生间", 4650, 2050, 6600, 3800), ("玄关", 4650, 200, 6600, 1950))
 
 
 class Builder:
@@ -160,34 +180,28 @@ class Builder:
 
 def build(out_path: str, pack_symbols: str) -> str:
     b = Builder(pack_symbols)
-    # 墙（轴线坐标，毫米）
-    b.wall("外墙-南", (0, 100), (6800, 100), 200, "cn-bearing")
-    b.wall("外墙-北", (6800, 3900), (0, 3900), 200, "cn-bearing")
-    b.wall("外墙-东", (6700, 200), (6700, 3800), 200, "cn-bearing")
-    b.wall("外墙-西", (100, 3800), (100, 200), 200, "cn-bearing")
-    b.wall("隔墙-客厅/卫生间", (4600, 200), (4600, 3800), 100, "cn-partition")
-    b.wall("隔墙-卫生间/玄关", (4650, 2000), (6600, 2000), 100, "cn-partition")
-    # 门窗
-    b.door("外墙-南", 5200, 900, "入户门 M1")
-    b.door("隔墙-客厅/卫生间", 800, 900, "客厅门 M2", "SINGLE_SWING_RIGHT")
-    b.door("隔墙-卫生间/玄关", 300, 700, "卫生间门 M3")
-    b.window("外墙-西", 900, 1800, 1500, 900, "客厅窗 C1")
-    b.window("外墙-北", 900, 900, 600, 1500, "卫生间高窗 C2")
-    # 空间
-    b.space("客厅", 200, 200, 4550, 3800)
-    b.space("卫生间", 4650, 2050, 6600, 3800)
-    b.space("玄关", 4650, 200, 6600, 1950)
+    for w in WALLS:
+        b.wall(*w)
+    for d in DOORS:
+        b.door(*d)
+    for w in WINDOWS:
+        b.window(*w)
+    for s in SPACES:
+        b.space(*s)
     # 楼板、吊顶
     b.box("IfcSlab", "楼板", 0, 0, -120, 6800, 4000, 120, "FLOOR")
     c1 = b.box("IfcCovering", "石膏板边吊", 200, 200, 2600, 4350, 3600, 20, "CEILING")
     c2 = b.box("IfcCovering", "铝扣板吊顶", 4650, 2050, 2400, 1950, 1750, 10, "CEILING")
-    # 家具（占位盒子）
-    b.box("IfcFurniture", "三人沙发", 650, 2850, 0, 2400, 900, 800, "CHAIR")
-    b.box("IfcFurniture", "茶几", 1450, 1700, 0, 1100, 600, 420, "TABLE")
-    b.box("IfcFurniture", "电视柜", 1200, 200, 0, 2000, 400, 450, "SHELF")
-    # 洁具、地漏（局部 +y 指向室内）
-    b.point("cn_toilet", "坐便器", 6100, 3800, 0, 180)          # 背靠北墙
-    b.point("cn_basin", "台盆", 4650, 3250, 850, -90)            # 靠隔墙（西侧）
+    # 家具、洁具：只有一处定义，就是示例布置意图（和单独的家具布置流程同一份）
+    from . import furnish, plan2ifc
+    with open(os.path.join(furnish.PACK, "example-intent.json"), encoding="utf-8") as fh:
+        items, errors = furnish.solve(json.load(fh), recognition())
+    if errors:
+        raise ValueError(f"示例布置意图摆不了：{errors[0]['msg']}")
+    cache = {}
+    for it in items:
+        plan2ifc.place_item(b.f, cache, it, it["x"], it["y"], it["z"], b.storey)
+    # 地漏（局部 +y 指向室内）
     b.point("cn_floor_drain", "地漏", 5600, 2600, 0)
     # 插座、开关
     b.point("cn_socket", "插座 S1 电视", 1700, 200, 300, 0)
@@ -195,7 +209,7 @@ def build(out_path: str, pack_symbols: str) -> str:
     b.point("cn_socket", "插座 S3 沙发左", 450, 3800, 300, 180)
     b.point("cn_socket", "插座 S4 沙发右", 3400, 3800, 300, 180)
     b.point("cn_socket", "插座 S5", 4550, 2800, 300, 90)         # 隔墙客厅侧
-    b.point("cn_socket_splash", "防溅插座 S6 台盆", 4650, 2850, 1500, -90)
+    b.point("cn_socket_splash", "防溅插座 S6 台盆", 4650, 2700, 1500, -90)
     b.point("cn_socket_splash", "防溅插座 S7 坐便", 6600, 3300, 400, 90)
     b.point("cn_switch_2", "双联开关 K1 客厅", 4550, 1850, 1300, 90)
     b.point("cn_switch_1", "单联开关 K2 卫生间", 5800, 1950, 1300, 180)
@@ -207,3 +221,63 @@ def build(out_path: str, pack_symbols: str) -> str:
     b.point("cn_downlight", "筒灯 L4", 5600, 1000, 2740)
     b.f.write(out_path)
     return out_path
+
+
+def recognition() -> dict:
+    """同一套墙、门窗、房间写成识别结果（dxfplan 的格式）：墙在洞口处断开，门窗记洞口中心、墙的方向和开启一侧，
+    轴网取外墙和隔墙的轴线。"""
+    from shapely.geometry import LineString, box
+    from shapely.ops import unary_union
+    axis = {w[0]: w for w in WALLS}
+    rooms = [{"id": f"R{i}", "name": n, "names": [n], "area_m2": round((x1 - x0) * (y1 - y0) / 1e6, 2),
+              "polygon": [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]], "unit": "U1", "unit_type": "", "public": False,
+              "labeled": True, "windows": [], "ext_windows": [], "doors": []} for i, (n, x0, y0, x1, y1) in enumerate(SPACES, 1)]
+    ops, cuts = [], {}
+    for kind, items in (("door", DOORS), ("window", WINDOWS)):
+        for it in items:
+            wall, dist, width, name = it[0], it[1], it[2], (it[3] if kind == "door" else it[5])
+            _, (ax, ay), (bx, by), t, _ = axis[wall]
+            L = math.hypot(bx - ax, by - ay)
+            u = ((bx - ax) / L, (by - ay) / L)
+            p0, p1 = (ax + u[0] * dist, ay + u[1] * dist), (ax + u[0] * (dist + width), ay + u[1] * (dist + width))
+            cut = LineString([p0, p1]).buffer(t / 2 + 1, cap_style="flat")
+            cuts.setdefault(wall, []).append(cut)
+            near = [r for r in rooms if box(*r["polygon"][0], *r["polygon"][2]).intersects(cut.buffer(10))]
+            oid = name.split()[-1]
+            for r in near:
+                r["doors" if kind == "door" else "windows"].append(oid)
+                if kind == "window" and wall.startswith("外墙"):
+                    r["ext_windows"].append(oid)
+            ops.append({"id": oid, "kind": kind, "block": "", "x": (p0[0] + p1[0]) / 2, "y": (p0[1] + p1[1]) / 2,
+                        "rot": round(math.degrees(math.atan2(u[1], u[0])), 3) % 360.0, "width": float(width),
+                        "depth": float(t) if kind == "window" else 0.0, "label": "", "label_raw": "", "exterior": wall.startswith("外墙"),
+                        "rooms": [r["id"] for r in near], "polygon": [], "sx": 1, "sy": 1, "wall_t": float(t),
+                        "leafs": 1 if kind == "door" else -1, "swing": 1,
+                        "hinge_end": (-1 if it[4] == "SINGLE_SWING_LEFT" else 1) if kind == "door" else 0,
+                        **({} if kind == "door" else {"sill": float(it[4])})})
+    walls = []
+    for name, a, b, t, _ in WALLS:
+        g = LineString([a, b]).buffer(t / 2, cap_style="flat").difference(unary_union(cuts.get(name, [])))
+        for p in getattr(g, "geoms", [g]):
+            walls.append({"id": f"W{len(walls) + 1}", "thickness": float(t), "length": round(p.length / 2 - t, 1),
+                          "polygon": [[round(x, 1), round(y, 1)] for x, y in p.exterior.coords], "exterior": name.startswith("外墙"),
+                          "keep": True, "reason": name})
+    return {"source": "demo_apartment", "region": [0, 0, 6800, 4000], "footprint": [[[0, 0], [6800, 0], [6800, 4000], [0, 4000], [0, 0]]],
+            "footprint_area_m2": 27.2, "declared_area_m2": None, "levels": [0.0],
+            "units": [{"id": "U1", "type": "", "area_m2": round(sum(r["area_m2"] for r in rooms), 2), "rooms": [r["id"] for r in rooms]}],
+            "rooms": rooms, "walls": walls, "openings": ops,
+            "axes": {"x": [{"label": str(i), "pos": float(x), "span": [100, 3900], "ends": ["bottom", "top"]} for i, x in enumerate((100, 4600, 6700), 1)],
+                     "y": [{"label": k, "pos": float(y), "span": [100, 6700], "ends": ["left", "right"]} for k, y in (("A", 100), ("B", 3900))]}}
+
+
+if __name__ == "__main__":
+    import argparse
+    from .printing import done
+    ap = argparse.ArgumentParser(prog="python -m jiazhuang.demo_apartment", allow_abbrev=False,
+                                 description="把示例户型写成识别结果 JSON（dxfplan 的格式），给家具布置和 make_plan_set 用。")
+    ap.add_argument("out", metavar="识别.json")
+    out = ap.parse_args().out
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+    with open(out, "w", encoding="utf-8") as fh:
+        json.dump(recognition(), fh, ensure_ascii=False, indent=1)
+    done(out)

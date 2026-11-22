@@ -167,19 +167,26 @@ def paper_symbols(drawing) -> dict[int, tuple[float, int]]:
     return out
 
 
+def _outline_fp(geo, el):
+    """算建筑外包用的平面轮廓（米）：墙、柱、凸窗用构件投影；普通门窗只算墙厚范围里的洞口（门框、门扇比墙面多出的一点不算，
+    三道尺寸量的是墙）。"""
+    if (el.is_a("IfcDoor") or el.is_a("IfcWindow")) and not openings._is_bay(el):
+        fr = geo.frame(el)
+        if fr is not None:
+            return openings.oriented_box(fr["c"][0], fr["c"][1], fr["u"][0], fr["u"][1], fr["w"] / 2, fr["t"] / 2)
+    return geo.fp(el)
+
+
 def elements_extent(f, query, classes=("IfcWall", "IfcColumn", "IfcDoor", "IfcWindow")):
-    """选择器选中的构件（默认只看墙、柱、门窗）在平面上的外包（米）；分区图的尺寸按它画，不会压到伸出去的墙垛。"""
+    """选择器选中的构件（默认只看墙、柱、门窗）在平面上的外包（米，_outline_fp）；分区图的尺寸按它画，不会压到伸出去的墙垛。"""
     geo = plan_geometry(f)
-    bs = [p.bounds for e in usel.filter_elements(f, query) if e.is_a() in classes for p in [geo.fp(e)] if p is not None]
+    bs = [p.bounds for e in usel.filter_elements(f, query) if e.is_a() in classes for p in [_outline_fp(geo, e)] if p is not None]
     if not bs:
         return None
     return (min(b[0] for b in bs), min(b[1] for b in bs), max(b[2] for b in bs), max(b[3] for b in bs))
 
 
-def _oriented_box(cx, cy, ux, uy, half_u, half_n):
-    nx, ny = -uy, ux
-    return Polygon([(cx + sx * ux * half_u + sy * nx * half_n, cy + sx * uy * half_u + sy * ny * half_n)
-                    for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))])
+_oriented_box = openings.oriented_box
 
 
 def _text_box(literal, size, den, x, y, align="center", rot=0.0):
@@ -1933,13 +1940,13 @@ def side_margin_mm(n_chains, bubbles):
 
 
 def envelope(f, crop=None, classes=("IfcWall", "IfcColumn", "IfcDoor", "IfcWindow")):
-    """墙、柱、门窗在平面上的外包（米）；给 crop 时只算落在裁切框里的部分。"""
+    """墙、柱、门窗在平面上的外包（米，_outline_fp）；给 crop 时只算落在裁切框里的部分。"""
     geo = plan_geometry(f)
     clip = _box(*crop) if crop else None
     bs = []
     for cls in classes:
         for el in f.by_type(cls):
-            p = geo.fp(el)
+            p = _outline_fp(geo, el)
             if p is None:
                 continue
             if clip is not None:
@@ -2391,36 +2398,12 @@ def level_mark(f, drawing, den, levels, z=0.0, bbox_m=None, style="stack", dry=F
 
 
 # ---------------------------------------------------------------- 门窗编号
-_SWING = ("SINGLE_SWING_LEFT", "SINGLE_SWING_RIGHT", "DOUBLE_SWING_LEFT", "DOUBLE_SWING_RIGHT")
-
-
 def _opening_zone(fr):
-    """门窗本身占的地方（墙厚范围内的洞口）+ 平开门扫过的地方。米。
-    门扇向局部 +y（frame 的 n）开，铰链在墙面上（ifcopenshell 参数化门的约定：单扇 LEFT 铰链在局部 x=0、RIGHT 在
-    x=宽；双扇两头各一扇）：单扇、双扇平开门按扇形算（扇形外的角上能放字），其余开启方式按整块矩形算。"""
-    c, u, n, w, t = fr["c"], fr["u"], fr["n"], fr["w"], fr["t"]
+    """门窗本身占的地方（墙厚范围内的洞口）+ 平开门扫过的地方，米（openings.opening_zones，家具校验用的同一份）；凸窗是它的轮廓。"""
     if fr["bay"]:
         return [fr["fp"]]
-    zones = [_oriented_box(c[0], c[1], u[0], u[1], w / 2 + 0.02, t / 2 + 0.02)]
     el = fr["el"]
-    if el.is_a("IfcDoor"):
-        op = el.OperationType or ""
-        face = c + n * (t / 2)
-
-        def sector(h, d, r):   # 铰链 h，门扇关着时朝 d，开到 +n
-            return Polygon([tuple(h)] + [tuple(h + r * (math.cos(a) * d + math.sin(a) * n)) for a in np.linspace(0.0, math.pi / 2, 10)])
-        if op == "SINGLE_SWING_LEFT":
-            zones.append(sector(face - u * w / 2, u, w))
-        elif op == "SINGLE_SWING_RIGHT":
-            zones.append(sector(face + u * w / 2, -u, w))
-        elif op in ("DOUBLE_DOOR_SINGLE_SWING", "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_LEFT", "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_RIGHT"):
-            zones += [sector(face - u * w / 2, u, w / 2), sector(face + u * w / 2, -u, w / 2)]
-        else:
-            leaf = w if op in _SWING else (w / 2 if op.startswith("DOUBLE_DOOR") and "SWING" in op else 0.0)
-            if leaf:
-                cc = c + n * (t / 2 + leaf / 2)
-                zones.append(_oriented_box(cc[0], cc[1], u[0], u[1], w / 2, leaf / 2))
-    return zones
+    return openings.opening_zones(fr["c"], fr["u"], fr["n"], fr["w"], fr["t"], (el.OperationType or "") if el.is_a("IfcDoor") else None)
 
 
 def _obstacles(f, drawing):

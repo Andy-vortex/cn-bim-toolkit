@@ -8,6 +8,7 @@
 |---|---|---|
 | 读图：打散的天正 DXF → 房间、户、墙、门窗、轴网 | `dxfplan.py` | 实验 |
 | 方案与拆改（只动非承重隔墙） | `scheme.py`、`renovate.py` | 实验 |
+| 家具布置：房间摘要、布置意图 → 坐标、几何校验 | `furnish.py`，约定包 `packs/cn/furniture/` | 实验 |
 | 建模 → IFC4 | `plan2ifc.py`、`symbols.py` | 可用 |
 | 平面图、门窗表、图纸目录 | `drawset.py`、`annotate.py`、`openings.py`、`schedules.py`，约定包 `packs/cn/drawing/` | 可用 |
 | 水电点位图、顶面图 | 同上 | 实验 |
@@ -35,6 +36,17 @@ blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- build/floor
 ```
 
 其余选项（方案、图号前缀等）：`blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- --help`
+
+## 家具布置
+
+agent 读房间摘要，写布置意图（放什么、靠哪面墙、和谁的关系，不写坐标）；`place` 换算成坐标、做几何校验，有违规退出 1，报告里每条一行原因，改意图重来。格式见 [packs/cn/furniture](packs/cn/furniture/README.md)。家具类型运行时从 Bonsai 自带的家具库引进。
+
+```bash
+PYTHONPATH=src python -m jiazhuang.demo_apartment build/furnish/recog.json
+python scripts/furnish.py context build/furnish/recog.json
+python scripts/furnish.py place build/furnish/recog.json packs/cn/furniture/example-intent.json build/furnish
+blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- build/furnish/recog.json build/furnish/out --scheme build/furnish/scheme.json --title 平面布置图
+```
 
 ## 输出
 

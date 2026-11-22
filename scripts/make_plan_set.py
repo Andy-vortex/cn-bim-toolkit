@@ -159,7 +159,9 @@ OX, OY = info["offset"]
 polys = {r["id"]: r["polygon"] for r in rec["rooms"]}
 wall_pts = [p for w in rec["walls"] for p in w["polygon"]]
 has_grid = bool(f.by_type("IfcGrid"))
-legend = sorted({it["key"] for it in sch.get("items", [])})
+PACK_KEYS = symbols.load_pack(SYMBOLS)
+legend = sorted({it["key"] for it in sch.get("items", []) if it["key"] in PACK_KEYS})   # 家具看图认得出，不进图例
+has_furniture = any(it["key"] not in PACK_KEYS for it in sch.get("items", []))
 L = lambda v: (v - OX) / 1000.0     # 图纸 x（毫米）→ 本地 x（米）
 
 
@@ -298,12 +300,10 @@ else:
     den = fit_scale(E, AVAIL_W)
     ov = M_EXT2 + 2   # 总图只有下、左两侧尺寸（各单元首末轴 + 总尺寸）
     top = 12.0 if blocks else 3.0   # 分区时上方注各段图号
-    # 1:200 及更小的总图不画点位和扶手（图例也不列点位，点位看分区图）
-    points = "IfcAlarm, IfcOutlet, IfcSwitchingDevice, IfcWasteTerminal, IfcRailing, IfcAudioVisualAppliance, " if den >= 200 else ""
+    # 1:200 及更小的总图不画点位、扶手，家具按 drawset.overview_exclude（图例也不列点位，点位看分区图）
     whole = drawset.add_view(TITLE, "PLAN_VIEW", storey.id(), den,
                              (E[0] - pad(den, ov), E[1] - pad(den, ov), E[2] + pad(den, 3), E[3] + pad(den, top)), margin_paper_mm=2,
-                             exclude=points + EXCL
-                             + ' + IfcWall, Pset_WallCommon.Status="DEMOLISH"')
+                             exclude=drawset.overview_exclude(den, has_furniture, EXCL + ' + IfcWall, Pset_WallCommon.Status="DEMOLISH"'))
     drawset.log("tags", annotate.opening_tags(f, whole, den, z=Z))
     drawset.log("labels", annotate.space_labels(f, whole, den, mode="abbr" if den >= 200 else "full", z=Z,
                                                 abbr=LABELS.get("abbr"), short=LABELS.get("short")))

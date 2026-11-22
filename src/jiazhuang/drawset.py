@@ -147,6 +147,20 @@ def _ensure_symbols() -> None:
         log("symbols written", rel, len(ids))
 
 
+OVERVIEW_POINTS = "IfcAlarm, IfcOutlet, IfcSwitchingDevice, IfcWasteTerminal, IfcRailing, IfcAudioVisualAppliance, "
+
+
+def overview_exclude(den: int, furniture: bool, rest: str) -> str:
+    """总图视图的 Exclude 选择器：1:200 及更小不画点位和扶手；有家具时 1:200 只画固定家具（洁具、橱柜），比 1:200 更小的
+    家具都不画（JZ_Furniture.Placement，plan2ifc.place_item 写的）。rest 是别的要排除的（接在后面）。"""
+    q = (OVERVIEW_POINTS if den >= 200 else "") + rest
+    if furniture and den >= 200:
+        q += ' + IfcElement, JZ_Furniture.Placement="活动"'
+    if furniture and den > 200:
+        q += ' + IfcElement, JZ_Furniture.Placement="固定"'
+    return q
+
+
 def add_view(name: str, target_view: str, hint, den: int, extents, margin_paper_mm=30.0, exclude: str | None = None, crop=None):
     """新建一个视图并设好比例、范围、过滤。extents = (x0, y0, x1, y1) 米（相机范围 = extents 四周再加 margin_paper_mm）。
     crop = (x0, y0, x1, y1) 米：模型只画到这个框（分段图的切口），框外留给尺寸、轴号；存进 IFC（视图的 JZ_View 属性集），
