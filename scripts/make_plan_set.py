@@ -350,7 +350,8 @@ sheet_list = []   # (图号, 图名, 比例, 图幅, 备注)
 for ident, v, den, zid in views:
     # 图例的点位行只列这张图上实际画出的种类（平面图上不画的吸顶监控等不列）；写过简称的（总图，1:150 上写不下全名的小房间）
     # 末尾一行是简称对照
-    keys = [k for k in legend if k in drawset.drawn_symbol_keys(v)] if legend and den < 200 else []
+    drawn = drawset.drawn_symbol_keys(v) if legend and den < 200 else set()
+    keys = [k for k in legend if k in drawn] if drawn else []
     abbr = annotate.abbr_legend(v)
     if zid:
         # 分区/分段图：有设施点位时图例在右侧预留的一栏（墙体行并在里面）；没有点位的不留栏，墙体图例找图面上的空地放，

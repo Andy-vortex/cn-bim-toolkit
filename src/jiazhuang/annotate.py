@@ -1030,11 +1030,14 @@ def _grow(polys, ax, dn, up):
 
 
 def _row_box(o, d, r, hmin):
-    """_same_line 再加上下：横排字（高不小于 hmin，不是引线）上下各让出 r（左右有重叠时隔一行），左右各让出 d。"""
+    """_same_line 再加上下：横排字（高不小于 hmin，不是引线）上下各让出 r（左右有重叠时隔一行），左右各让出 d。竖排字（宽不小于
+    hmin，如竖写的门编号）左右也让出 d：横写的房名紧贴在它旁边，会和它连读成一串。"""
     x0, y0, x1, y1 = o.bounds
     w, h = x1 - x0, y1 - y0
     if w > h and h >= hmin and o.area >= 0.9 * w * h:
         return _box(x0 - d, y0, x1 + d, y1).union(_box(x0, y0 - r, x1, y1 + r))
+    if h > w >= hmin and o.area >= 0.9 * w * h:
+        return _box(x0 - d, y0, x1 + d, y1)
     return o
 
 
@@ -2513,6 +2516,8 @@ def paper_pose(f, e, k, den):
     _paper_outline 按它算笔画。符号代表贴墙的点位，要整个画在点位所在的房间里、不压墙：依次试转角 PAPER_TURNS 和各变体
     （symbols.variants：原样、左右镜像、画到插入点一侧），取第一个笔画不压墙、不出房间、不压平开门扫过的扇形的（都不到
     PAPER_CLEAN_MM）；都不行取压墙和出房间的笔画最短的（压墙的那段两样都算），一样短的取压门扇少的。原样就干净的不动。
+    转向（转角不为 0）只在不转向的各变体都压墙或出房间时才用：不转向时符号背贴着点位所在的墙，转过去圆圈离墙远，读不出
+    点位在哪道墙上；不转向的变体里有不压墙、不出房间的，就在这些里取压门扇少的。
     房间：点位放置往局部 +y（朝室内）0.1m 那一点所在的房间（PlanGeometry.space_at），找不到只看墙。"""
     import ifcopenshell.util.placement as up
     key = (id(f), e.id(), k, den)
@@ -2531,6 +2536,8 @@ def paper_pose(f, e, k, den):
         mm = 1000.0 / den   # 米 → 图纸毫米
         score = None
         for i, pose in enumerate((suf, turn) for turn in PAPER_TURNS for suf in symbols.variants(spec)):
+            if pose[1] != PAPER_TURNS[0] and score is not None and score[0] == 0.0:
+                break   # 不转向就有不压墙、不出房间的：不转向
             ink = shapely.MultiLineString(_paper_lines(f, e, k, pose))
             near = [geo.wall_polys[j] for j in geo.wall_tree.query(ink)]
             in_wall = shapely.union_all([w.intersection(ink) for w in near]).length * mm if near else 0.0
@@ -2856,7 +2863,8 @@ def opening_tags(f, drawing, den, z=0.0, size=None, max_den=150, bbox_m=None, pl
                 cpos = fr["c"] + n * out_sgn * off_n + u * (s * k * step)
                 b = _oriented_box(cpos[0], cpos[1], d[0], d[1], tw / 2 + P(0.3), th / 2 + P(0.2))
                 bx = b.bounds
-                on_leader = any(bx[0] - P(0.3) < a < bx[2] + P(0.3) for a in axis_x) if abs(d[0]) > abs(d[1]) \
+                # 室外的轴号引线和墙垂直：沿墙方向（u，不是字的方向——perp 时字垂直于墙）量字骑不骑在引线上
+                on_leader = any(bx[0] - P(0.3) < a < bx[2] + P(0.3) for a in axis_x) if abs(u[0]) > abs(u[1]) \
                     else any(bx[1] - P(0.3) < a < bx[3] + P(0.3) for a in axis_y)
                 bo = box_wide if fr.get("side") in ("top", "left") else box_out
                 if (bo is None or bo.contains(b)) and not bld_in.intersects(b) and not on_leader \
@@ -2896,7 +2904,7 @@ def opening_tags(f, drawing, den, z=0.0, size=None, max_den=150, bbox_m=None, pl
         ext = outside_zone(fr)
         b = _leader_tag(f, drawing, den, fr, el, tw, th, tag_size(el.Tag), z, allowed, hard, hard_tree, occ,
                         lambda b: other_pen(el, b), pen, fronts=[g for k, g in fronts.items() if k != el.id()], clean=clean, outside=ext,
-                        closer=lambda b: other_pen(el, b) >= LEADER_CLOSER, same=[bx for t, bx in tagged if t == el.Tag])
+                        closer=lambda b: other_pen(el, b) >= LEADER_CLOSER, same=[bx for t, bx in tagged if t == el.Tag], sym_tree=sym_tree)
         if b and ext is not None and not bld_in.intersects(b):   # 写在室外的引出字：尺寸数字要避开
             _OUTSIDE.setdefault(drawing.id(), []).append(b)
         if b:
@@ -2932,6 +2940,13 @@ def opening_tags(f, drawing, den, z=0.0, size=None, max_den=150, bbox_m=None, pl
             found = search_outside(fr, pp, P(TAG_NEAR_MM), use_res=ur)
             if found is None and best is None and el.id() in yield_wins:   # 小房间的窗：室内、室外平行都写不下，垂直于墙写在窗外
                 found = search_outside(fr, pp, P(TAG_NEAR_MM), perp=True, use_res=ur)
+            # 窗外的编号沿墙偏出窗宽一半以上（大半贴着实墙，看不出是哪樘窗的）：房里写得下就写在房里（预留的房名位置也不管，
+            # 房名后写时另找地方）
+            if found and el.is_a("IfcWindow") and abs(float(np.dot(found[1] - fr["c"], pp[1]))) > fr["w"] / 2:
+                inside = best if best is not None else (search(pp, P(TAG_NEAR_MM)) if ur else None)
+                if inside is not None:
+                    found, best = None, inside
+                    log("tag inside (outside off the window)", el.Tag, el.Name)
             if found:
                 best, how, outside = found, ("outside" if best is None else None), True
         if best is None and ur:   # 不占预留的房名位置时近处、室外都放不下：照常找（房名后写时另找地方）
@@ -2999,12 +3014,12 @@ TAG_LEADER_MM = 12.0  # 门窗编号的引线（折线全长，图纸毫米）�
 
 
 def _leader_tag(f, drawing, den, fr, el, tw, th, size, z, allowed, hard, hard_tree, occ, other_pen, pen_of, fronts=(), clean=False,
-                outside=None, closer=None, same=()):
+                outside=None, closer=None, same=(), sym_tree=None):
     """引出线编号（旁边放不下时）：编号写在附近的空地上，用 Bonsai 的 TEXT_LEADER 从字的一端引一条折线到洞口中点（_leader_path：
     顺着字的方向引出，再 45°/60°/90° 折向洞口，不回头穿过自己的字）。
     硬性要求：字在洞口两侧不隔墙的地方（_sides：不写进隔着墙的别的房间、井道里），不压墙、门窗和开启范围、已写的字
     （编号、尺寸数字、别的引线；房间名后放，会避开编号和引线），不写在别的门的门前（fronts，_front_zone），不和同号的编号
-    （same）上下叠放（左右有重叠时上下隔一行 ROW_MM），引线不穿墙、不穿过已写的字，引线全长不超过 TAG_LEADER_MM；窗的编号
+    （same）上下叠放（左右有重叠时上下隔一行 ROW_MM），引线不穿墙、不穿过已写的字和纸面符号（sym_tree），引线全长不超过 TAG_LEADER_MM；窗的编号
     离别的门窗比离自己的洞口近的位置不要（closer；门先找这样的位置，没有才把离别的门窗近计代价）。满足的位置在 0.5mm 网格上由近到远找，依次：
       1. 洞口周围 LEADER_NEAR_MM 内，不压家具和点位符号、不压房间名的标注点、离别的门窗不近（other_pen 为 0），最近的；
       2. 同样范围，压家具、标注点或离别的门窗近的计代价，取 代价 + 离洞口的距离 最小的（字贴着墙或别的图形放的优先，
@@ -3060,19 +3075,23 @@ def _leader_tag(f, drawing, den, fr, el, tw, th, size, z, allowed, hard, hard_tr
             p1 = (float(q[0]), float(q[1]))
         return first, _leader_path(p0, p1, out, den)
 
-    def through(line):
-        """引线穿墙，或穿过已写的字（别的编号、尺寸数字）和别的引线。"""
+    def through(line, sym=True):
+        """引线穿墙，或穿过已写的字（别的编号、尺寸数字）和别的引线，或（sym=True 时）穿过按纸面大小画的点位符号（sym_tree：
+        笔画连同圈起来的地方，圆点也不落在上面）。"""
         if geo.crosses_wall(line, WALL_TOUCH_M):
+            return True
+        if sym and sym_tree is not None and len(sym_tree.query(line.buffer(P(0.1)), predicate="intersects")):
             return True
         band = line.buffer(P(0.3))
         return any(o.intersects(band) for o in occ)
 
     def search(rmax, region, strict, vert=False, pad=(0.4, 0.3), text_gap=0.6, cross=False, front="hard", long=False, closer_hard=False,
-               stack=False):
+               stack=False, sym=True):
         """region 里离洞口 rmax（图纸毫米）以内的空地：字框（pad 外扩）不压墙、门窗和开启范围，离已写的字 text_gap 以上；
         别的门的门前（fronts）：front="hard" 不写，"cost" 写了加代价 LEADER_FRONT，None 不管。strict：第一个合格的（不压
         家具等、离别的门窗不近）就是；否则取 代价 + 距离 最小的。cross=True：引线可以穿墙、穿字。long=False：引线不超过
-        TAG_LEADER_MM。closer_hard：离别的门窗比离自己近的位置不要。stack=False：不和同号的编号上下叠放。"""
+        TAG_LEADER_MM。closer_hard：离别的门窗比离自己近的位置不要。stack=False：不和同号的编号上下叠放。sym=False：引线
+        可以穿过点位符号。"""
         if region is None:
             return None
         zone = region.intersection(allow).intersection(_box(c[0] - P(rmax), c[1] - P(rmax), c[0] + P(rmax), c[1] + P(rmax)))
@@ -3104,7 +3123,7 @@ def _leader_tag(f, drawing, den, fr, el, tw, th, size, z, allowed, hard, hard_tr
                 line = LineString(path)
                 if not long and line.length > P(TAG_LEADER_MM):
                     continue
-                if not cross and through(line):
+                if not cross and through(line, sym):
                     continue
                 b = _box(x - hw, y - hh, x + hw, y + hh)
                 if (closer_hard and closer is not None and closer(b)) or (not stack and stacked(b)):
@@ -3121,6 +3140,16 @@ def _leader_tag(f, drawing, den, fr, el, tw, th, size, z, allowed, hard, hard_tr
         return best
 
     def attempt(front, **kw):
+        """一轮找位：先找引线不穿过点位符号的，这一轮里没有才让引线穿过符号（记日志 tag leader over symbol；不为躲符号
+        降到更宽的一轮）。"""
+        got = attempt1(front, **kw)
+        if got is None and sym_tree is not None:
+            got = attempt1(front, sym=False, **kw)
+            if got:
+                log("tag leader over symbol", el.Tag, el.Name)
+        return got
+
+    def attempt1(front, **kw):
         """一轮找位（kw 传给 search）。front=False：不写在别的门前；True：门挨着门（1:150 的核心筒）时别的门的门前也可以写，
         计代价 LEADER_FRONT。"""
         if clean:

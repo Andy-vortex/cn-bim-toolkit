@@ -287,11 +287,14 @@ def write_dxf(path):
 
 
 # ---------------------------------------------------------------- 方案：两个分区 + 水电点位（出分区平面和图例用）
-def write_scheme(recog_path, out_path):
+def write_scheme(recog_path, out_path, rec=None):
     from shapely.geometry import Point, Polygon
     from jiazhuang import scheme
-    with open(recog_path, encoding="utf-8") as fh:
-        rec = json.load(fh)
+    if os.path.exists(out_path):   # 失败（退出 1）时不留上一次的 scheme.json
+        os.remove(out_path)
+    if rec is None:
+        with open(recog_path, encoding="utf-8") as fh:
+            rec = json.load(fh)
     sch = scheme.from_recognition(rec)
     ox, oy = ORIGIN
     split = 31200.0 + ox   # 西区 = 1、2 号户 + 核心筒；东区 = 3、4 号户；走道不分区
@@ -308,16 +311,23 @@ def write_scheme(recog_path, out_path):
     heights = {k: s.get("default_height", 0) for k, s in pack.items()}   # 都按默认安装高度，图上不出例外高度
     items = []
 
+    rooms, opens, _ = plan()
+    runs = wall_runs(rooms)
+    pieces = wall_pieces(runs, opens)
+    inner = [(i, g.buffer(-10.0)) for i, g in polys]
+    room_of = lambda x, y: next((i for i, g in inner if g.contains(Point(x + ox, y + oy))), None)   # 点所在的房间（离墙面 10 以上）
+
     def put(key, name, x, y, rot):
+        if not key.startswith("cn_switch"):   # 开关由 switch_spot 放在门边（离洞边 SWITCH_FROM_DOOR）
+            xy = off_doors(x, y, opens, runs, room_of)
+            if xy is None:
+                return
+            x, y = xy
         p = Point(x + ox, y + oy)
         rid = next((i for i, g in polys if g.contains(p)), None)
         if rid:
             items.append({"key": key, "name": name, "x": round(x + ox), "y": round(y + oy), "z": float(heights.get(key, 0)),
                           "rot": rot, "room": rid})
-    rooms, opens, _ = plan()
-    pieces = wall_pieces(wall_runs(rooms), opens)
-    inner = [(i, g.buffer(-10.0)) for i, g in polys]
-    room_of = lambda x, y: next((i for i, g in inner if g.contains(Point(x + ox, y + oy))), None)   # 点所在的房间（离墙面 10 以上）
     for _, r in rooms:
         name, x0, x1, y0, y1, _g = r
         if name in ("主卫", "卫生间"):
@@ -341,6 +351,12 @@ def write_scheme(recog_path, out_path):
     if far:
         printing.log("failed", "switch off the wall", far)
         sys.exit(1)
+    # 点位不落在门洞宽度及两侧 DOOR_CLEAR 以内（门扇、开启范围里）：off_doors 挪不开的已经不生成，还有就是方案生成错了
+    wx = lambda it: (it["x"] - ox, it["y"] - oy)
+    in_door = [(it["name"], it["x"], it["y"]) for it in items if door_at(*wx(it), opens, runs)]
+    if in_door:
+        printing.log("failed", "point in a doorway", in_door)
+        sys.exit(1)
     sch["items"] = items
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(sch, fh, ensure_ascii=False, indent=1)
@@ -352,6 +368,41 @@ SWITCH_OFF_FACE = 20.0     # 开关离墙面多远（mm）
 SWITCH_HALF = 60.0         # 开关面板半宽（mm，86 见方的面板再留一点）：整个面板都在这面墙上、这间房里
 SWITCH_WALL_MAX = 300.0    # 开关离最近的墙不超过这么远（mm）
 ROT_INTO = {(0, 1): 0, (0, -1): 180, (1, 0): -90, (-1, 0): 90}   # 点位局部 +y（朝室内）的方向 → 放置转角（symbols.place_occurrence）
+DOOR_CLEAR = 200.0         # 插座、地漏等点位离门洞边至少这么远（mm，沿墙量；门洞两侧墙面以内的都算，免得画在门扇、开启范围里）
+DOOR_REACH = 300.0         # 离门所在那道墙的墙面这么近（mm）的点位才算贴着这道墙
+
+
+def door_at(x, y, opens, runs):
+    """(x, y)（墙轴线坐标）落在哪樘门（平开、推拉）的门洞宽度及两侧 DOOR_CLEAR 以内、离墙面不到 DOOR_REACH：返回那樘门的
+    (沿墙方向下标 0/1, 门洞中心沿墙坐标, 半宽 + DOOR_CLEAR)，不在任何门洞旁返回 None。"""
+    for _, o in opens:
+        k, d, ox_, oy_, w = o[:5]
+        if k not in ("door", "door2", "slide"):
+            continue
+        i = 0 if d == "h" else 1                       # 沿墙的坐标下标
+        a0, c = (ox_, oy_) if d == "h" else (oy_, ox_)
+        along, perp = (x, y) if d == "h" else (y, x)
+        half = w / 2 + DOOR_CLEAR
+        if abs(along - a0) < half - 1.0 and abs(perp - c) < thickness_at(runs, o) / 2 + DOOR_REACH:
+            return i, a0, half
+    return None
+
+
+def off_doors(x, y, opens, runs, room_of):
+    """点位落在门洞旁（door_at）时沿墙挪到门洞边 DOOR_CLEAR 以外（先往离门洞中心远的一侧），挪后还要在原来那间房里、不在
+    别的门洞旁；挪不开返回 None（不生成这个点位）。不在门洞旁原样返回。"""
+    hit = door_at(x, y, opens, runs)
+    if hit is None:
+        return x, y
+    i, a0, half = hit
+    a = (x, y)[i]
+    rid = room_of(x, y)
+    for s in ((1, -1) if a >= a0 else (-1, 1)):
+        p = [x, y]
+        p[i] = a0 + s * half
+        if rid is not None and room_of(*p) == rid and door_at(*p, opens, runs) is None:
+            return p[0], p[1]
+    return None
 
 
 def switch_spot(rid, opens, pieces, room_of):
@@ -395,7 +446,18 @@ def main():
         p.error(err)
     if a.scheme:
         out = os.path.join(a.out, "scheme.json")
-        printing.log("items", write_scheme(recog, out))
+        if os.path.exists(out):   # 出错退出时不留上一次的 scheme.json
+            os.remove(out)
+        try:   # 和 make_plan_set 同样的检查：识别结果是 JSON 对象，认出了房间和墙
+            with open(recog, encoding="utf-8") as fh:
+                rec = json.load(fh)
+        except ValueError:
+            rec = None
+        if not isinstance(rec, dict):
+            p.error(f"不是识别结果 JSON：{recog}")
+        if not rec.get("rooms") or not rec.get("walls"):
+            p.error(f"识别结果里没有房间或墙：{recog}（检查 dxfplan 的 --region）")
+        printing.log("items", write_scheme(recog, out, rec))
     else:
         os.makedirs(a.out, exist_ok=True)
         out = os.path.join(a.out, "floor.dxf")

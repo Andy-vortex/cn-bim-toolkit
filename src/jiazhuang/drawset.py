@@ -664,8 +664,7 @@ LEGEND_GAP_MM = 3.0      # 图纸上找空地放图例时，离已画的东西�
 
 
 def _pack(pack_symbols: str) -> dict:
-    with open(pack_symbols, encoding="utf-8") as fh:
-        return json.load(fh)["types"]
+    return symbols.load_pack(pack_symbols)
 
 
 def _scope(sheet_svg: str) -> str:

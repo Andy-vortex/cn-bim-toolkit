@@ -26,8 +26,14 @@ HEIGHT_CLASSES = ("IfcOutlet", "IfcSwitchingDevice")
 
 
 def load_pack(path: str) -> dict:
+    """符号库（symbols.json 的 types）。符号键不能以变体后缀（VARIANTS：_m、_r、_l）结尾：出图时变体靠后缀认（base_key），
+    这样的键会被误拆成别的符号，读到就报错。"""
     with open(path, encoding="utf-8") as fh:
-        return json.load(fh)["types"]
+        types = json.load(fh)["types"]
+    bad = sorted(k for k in types if base_key(k) != k)
+    if bad:
+        raise ValueError(f"符号键不能以 {'、'.join(s for s in VARIANTS if s)} 结尾（出图时是变体后缀）：{'、'.join(bad)}（{path}）")
+    return types
 
 
 def default_heights(path: str) -> dict[str, float]:
