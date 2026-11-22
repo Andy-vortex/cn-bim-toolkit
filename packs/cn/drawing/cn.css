@@ -10,12 +10,15 @@
  * 参考：GB/T 50001-2017《房屋建筑制图统一标准》线宽组 b=0.5mm（0.7b≈0.35，0.5b=0.25，0.25b≈0.13）；
  *       字体用长仿宋，汉字字高不小于 3.5mm，数字字母不小于 2.5mm。
  * 数值为常用做法的起点，未逐条对照规范原文，待专业人员复核。
- * 说明：SVG 的 1 个单位 = 图纸上 1mm；字号是字体 em 尺寸，仿宋汉字实高约 0.9em、数字约 0.7em。
+ * 说明：SVG 的 1 个单位 = 图纸上 1mm；字号即字高（和 CAD 的文字高度一致）。含汉字的字不小于 3.5mm；
+ *       num 只用在只有数字、字母的字上。同一字号写在一条规则里。
  */
-text, tspan { font-family: 'FangSong', '仿宋', 'STFangsong', 'Noto Serif CJK SC', 'SimSun', serif; font-size: 3.6px; }
-text.small, tspan.small { font-size: 3.0px; }     /* 数字 ≈2.2mm，用于点位高度等 */
-text.regular, tspan.regular { font-size: 3.6px; } /* 汉字 ≈3.2mm，数字 ≈2.5mm：尺寸、说明 */
-text.large, tspan.large { font-size: 5.0px; }     /* 汉字 ≈4.5mm：房间名 */
+text, tspan, text.regular, tspan.regular { font-family: 'FangSong', '仿宋', 'STFangsong', 'Noto Serif CJK SC', 'SimSun', serif; font-size: 3.6px; }
+  /* 默认字号和 regular：尺寸数字、房间名、门窗编号 */
+text.num, tspan.num { font-size: 3.0px; }         /* 面积、点位高度、1:150 的门窗编号 */
+text.small, tspan.small, text.PLANLEVEL, tspan.PLANLEVEL { font-size: 3.5px; }
+  /* 最小的汉字：小房间名、简称、分段名、1:150 含汉字的门窗编号；楼面标高的数字（Bonsai 的 PLAN_LEVEL）和"（层高 …）" */
+text.large, tspan.large { font-size: 5.0px; }     /* 示例户型的房间名、总图上的分段图号 */
 text.header, tspan.header { font-size: 7.0px; }
 text.title, tspan.title { font-size: 10.0px; }
 
@@ -58,3 +61,8 @@ path.flush { stroke-width: 0.1; }
 /* 拆改（v0.3）：拆除的墙画红色虚线，不填充 */
 .cut.material-cndemolish, .material-cndemolish.cut, .projection.material-cndemolish, .material-cndemolish path
   { fill: none !important; stroke: #d00000; stroke-width: 0.35; stroke-dasharray: 1.2, 0.8; }
+
+/* 组合平面图上的分区线（点划线），由 EPset_Annotation.Classes 加类名 */
+.jz-zoneline { stroke-width: 0.35; stroke-dasharray: 6, 1.2, 0.8, 1.2; }
+/* 折断线 0.25；标高符号在 markers-CN.svg */
+.PredefinedType-BREAKLINE { stroke-width: 0.25; }

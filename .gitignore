@@ -1,6 +1,10 @@
 # 真实图纸、样本和输出，永不提交
 samples-private/
 build/
+# 兜底：图纸和模型文件放错了地方也不会被提交（仓库里不放图纸，示例图都由脚本生成到 build/；不分大小写）
+*.[dD][wW][gG]
+*.[dD][xX][fF]
+*.[iI][fF][cC]
 # 含个人信息的文档
 docs/private/
 # 下载的第三方安装包（不可信数据，单独存放）
@@ -18,5 +22,5 @@ __pycache__/
 *.blend2
 # 第三方源码
 third_party/
-# 出图时生成的合并样式表（含 Bonsai 的 GPL 样式，属于输出物）
-cn-combined.css
+# 出图的中间文件（视图、排版、图纸 SVG；合并样式表含 Bonsai 的 GPL 样式，属于输出物）
+work/

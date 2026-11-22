@@ -7,14 +7,19 @@
   4. 全部面合并后的外轮廓 = 建筑外边，洞口中心离外边不超过半个墙厚 = 外窗/外门；
   5. 分户：从每个"X 户型"文字所在的面出发，穿过非墙边界（门洞中线、窗线）做广度搜索，碰到公共空间（前室、通道、电梯…）就停。
 门窗块规律（天正）：插入点 = 洞口中心（在墙中线上），块 X 轴沿墙，|X 比例| = 洞宽，|Y 比例| = 墙厚（窗）。
+门窗编号（WINDOW_TEXT 层）：一个编号常被拆成同一基线上的几段 TEXT（"FM" "丙" "1221"），先拼回完整编号，
+再和门窗一对一配对；编号里的宽度位和识别出的洞宽差 1dm 以上的不采用（label 留空，原文留在 label_raw）。
 只依赖 ezdxf + shapely，在项目 venv 里跑。所有坐标单位 mm（与图纸一致）。
+命令行：python -m jiazhuang.dxfplan <平面.dxf> <识别.json> [检查图.svg] --region XMIN YMIN XMAX YMAX（选项见 --help）
 """
 from __future__ import annotations
 
 import collections
 import json
 import math
+import os
 import re
+import sys
 from dataclasses import dataclass, field, asdict
 
 import ezdxf
@@ -22,6 +27,8 @@ from ezdxf import bbox, path as dpath
 from shapely import STRtree, set_precision
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import polygonize, unary_union
+
+from . import markcode, printing
 
 U = re.compile(r"\\U\+([0-9A-Fa-f]{4})")
 ROOM_WORDS = ["主卧", "次卧", "卧室", "书房", "客厅", "起居室", "餐厅", "厨房", "主卫", "公卫", "卫生间", "阳台",
@@ -45,7 +52,8 @@ class Opening:
     rot: float
     width: float
     depth: float = 0.0  # 窗块 |Y 比例| ≈ 墙厚
-    label: str = ""
+    label: str = ""     # 采用的原图编号（宽度位与洞宽相差 ≤1dm）；没有或对不上为空
+    label_raw: str = "" # 配到这樘门窗的原图编号原文（label 为空而这里有值 = 与识别尺寸不符，未采用）
     exterior: bool = False
     rooms: list = field(default_factory=list)
     polygon: list = field(default_factory=list)   # 散线窗（凸窗）的外包轮廓
@@ -176,10 +184,97 @@ def _num(s):
     return float(m.group()) if m else None
 
 
+def _angle_diff(a, b, period=360.0):
+    d = (a - b) % period
+    return min(d, period - d)
+
+
+def join_labels(frags, gap_h=1.0):
+    """门窗编号：天正导出 T3 后一个编号常被拆成同一基线上的几段 TEXT（如 "FM" "丙" "1221"）。
+    按阅读方向（文字自身的 X 轴）把同一基线上首尾相接的碎片接起来：前一段文字外包的末端到后一段的起点
+    不超过 gap_h 倍字高（按字高算，不用绝对距离：同一张图换比例出图、字高变大也拼得上）；
+    前一段以数字结尾、后一段以字母开头的不接（那是挨着的另一个编号）。
+    frags: [(文字, x, y, 旋转角°, 字高, 实体)] → [(编号, 中心 x, 中心 y, 旋转角°)]，中心取各段文字外包的中心。"""
+    def corners(k):
+        s, x, y, _, _, e = frags[k]
+        try:
+            b = bbox.extents([e], fast=True)
+            if b.has_data:
+                return [(b.extmin.x, b.extmin.y), (b.extmax.x, b.extmin.y), (b.extmin.x, b.extmax.y), (b.extmax.x, b.extmax.y)]
+        except Exception:
+            pass
+        return [(x, y)]
+    ext = [corners(k) for k in range(len(frags))]
+    succ = {}
+    for i, (s, x, y, r, h, _) in enumerate(frags):
+        ux, uy = math.cos(math.radians(r)), math.sin(math.radians(r))
+        end_i = max((px - x) * ux + (py - y) * uy for px, py in ext[i])   # 本段文字末端（沿阅读方向，相对插入点）
+        for j, (s2, x2, y2, r2, h2, _) in enumerate(frags):
+            if j == i or _angle_diff(r, r2) > 1.0 or (s[-1:].isdigit() and s2[:1].isascii() and s2[:1].isalpha()):
+                continue
+            along = (x2 - x) * ux + (y2 - y) * uy
+            off = (y2 - y) * ux - (x2 - x) * uy
+            hh = max(h, h2, 1.0)
+            gap = min((px - x) * ux + (py - y) * uy for px, py in ext[j]) - end_i
+            if 0 < along and gap < gap_h * hh and abs(off) < 0.3 * hh and (i not in succ or along < succ[i][0]):
+                succ[i] = (along, j)
+    pred = {}
+    for i, (along, j) in succ.items():   # 一段只能接在一段后面：取最近的
+        if j not in pred or along < pred[j][0]:
+            pred[j] = (along, i)
+    nxt = {i: j for j, (_, i) in pred.items()}
+    out = []
+    for i in range(len(frags)):
+        if i in pred:
+            continue
+        chain = [i]
+        while chain[-1] in nxt:
+            chain.append(nxt[chain[-1]])
+        ents = [frags[k][5] for k in chain]
+        try:
+            b = bbox.extents(ents, fast=True)
+            cx, cy = (b.extmin.x + b.extmax.x) / 2, (b.extmin.y + b.extmax.y) / 2
+        except Exception:
+            cx, cy = sum(frags[k][1] for k in chain) / len(chain), sum(frags[k][2] for k in chain) / len(chain)
+        out.append(("".join(frags[k][0] for k in chain), cx, cy, frags[i][3]))
+    return out
+
+
+def match_labels(openings, labels, max_d=1200.0, ang_tol=10.0):
+    """编号文字和门窗一对一配对：文字方向要和洞口（所在墙）平行；按文字中心到洞口（块门窗为洞口中线段，
+    散线窗为外轮廓）的距离全局从近到远贪心，一个编号只给一樘、一樘只取一个编号，超过 max_d 的不配。
+    返回 {门窗序号: (编号, 距离)}。"""
+    geoms = []
+    for o in openings:
+        if o.polygon:
+            geoms.append(Polygon(o.polygon))
+        else:
+            a = math.radians(o.rot)
+            dx, dy = math.cos(a) * o.width / 2, math.sin(a) * o.width / 2
+            geoms.append(LineString([(o.x - dx, o.y - dy), (o.x + dx, o.y + dy)]))
+    cand = []
+    for li, (s, cx, cy, r) in enumerate(labels):
+        p = Point(cx, cy)
+        for oi, (o, g) in enumerate(zip(openings, geoms)):
+            if _angle_diff(r, o.rot, 180.0) > ang_tol:
+                continue
+            d = g.distance(p)
+            if d <= max_d:
+                cand.append((d, math.hypot(o.x - cx, o.y - cy), li, oi))
+    cand.sort()
+    used_l, out = set(), {}
+    for d, _, li, oi in cand:
+        if li in used_l or oi in out:
+            continue
+        used_l.add(li)
+        out[oi] = (labels[li][0], d)
+    return out
+
+
 def recognize(dxf_path: str, region, wall_keep_min=180.0) -> dict:
     doc = ezdxf.readfile(dxf_path)
     msp = doc.modelspace()
-    lines, wall_lines, openings, texts = [], [], [], []
+    lines, wall_lines, openings, texts, wtexts = [], [], [], [], []
     for e in msp:
         if not _inside(e, region):
             continue
@@ -217,6 +312,9 @@ def recognize(dxf_path: str, region, wall_keep_min=180.0) -> dict:
             s = clean(e.dxf.text if t == "TEXT" else e.text)
             p = e.dxf.insert
             texts.append((s, p.x, p.y, layer))
+            if layer == "WINDOW_TEXT" and s:   # 门窗编号碎片：拼接要用方向和字高
+                rot, h = (e.dxf.rotation, e.dxf.height) if t == "TEXT" else (e.get_rotation(), e.dxf.char_height)
+                wtexts.append((s, p.x, p.y, rot, h, e))
 
     net = set_precision(unary_union(lines), 1.0)
     allfaces = [f for f in polygonize(net) if f.area > 2000]  # >0.002 ㎡
@@ -231,7 +329,7 @@ def recognize(dxf_path: str, region, wall_keep_min=180.0) -> dict:
     # 文字
     room_texts = [(s, x, y) for s, x, y, l in texts if l in ("PUB_TEXT", "SPACE") and len(s) <= 8
                   and (any(w in s for w in ROOM_WORDS) or s in SHAFT_WORDS)]
-    win_labels = [(s, x, y) for s, x, y, l in texts if l == "WINDOW_TEXT"]
+    win_labels = join_labels(wtexts)
     unit_seeds = []   # (类型字母, x, y)
     for s, x, y, l in texts:
         if s.replace(" ", "") == "户型":
@@ -356,17 +454,32 @@ def recognize(dxf_path: str, region, wall_keep_min=180.0) -> dict:
             continue
         dmin = min(near.values())
         nb = {int(j) for j, d in near.items() if d <= dmin + 50}
-        mrr = f.minimum_rotated_rectangle
+        # 窗体主体 = 碎面里最大的那块（窗扇所在），宽度和方向按它的长边算；连通块里还会并进墙角凸出、侧面切角之类的
+        # 小碎面，只保留落在主体沿墙范围内的部分（窗台条、窗框条），否则宽度会被撑大 120～400mm
+        main = max((faces[i] for i in comp), key=lambda g: g.area)
+        mrr = main.minimum_rotated_rectangle
         cs = list(mrr.exterior.coords)
         e1 = math.dist(cs[0], cs[1]); e2 = math.dist(cs[1], cs[2])
         a = math.degrees(math.atan2(cs[1][1] - cs[0][1], cs[1][0] - cs[0][0])) if e1 >= e2 else \
             math.degrees(math.atan2(cs[2][1] - cs[1][1], cs[2][0] - cs[1][0]))
-        c = f.representative_point()
+        u, n = (math.cos(math.radians(a)), math.sin(math.radians(a))), (-math.sin(math.radians(a)), math.cos(math.radians(a)))
+        ts = [x * u[0] + y * u[1] for g in comp if faces[g].area >= 0.25 * main.area for x, y in faces[g].exterior.coords]
+        lo, hi = min(ts), max(ts)
+        s0 = main.centroid.x * n[0] + main.centroid.y * n[1]
+        slab = Polygon([(u[0] * t_ + n[0] * s_, u[1] * t_ + n[1] * s_) for t_, s_ in
+                        ((lo, s0 - 1e5), (hi, s0 - 1e5), (hi, s0 + 1e5), (lo, s0 + 1e5))])
+        if f.difference(slab).area > 1.0:
+            body = f.intersection(slab)
+            body = unary_union([g for g in getattr(body, "geoms", [body]) if g.geom_type == "Polygon"])
+        else:
+            body = f
+        ns = [x * n[0] + y * n[1] for x, y in body.convex_hull.exterior.coords]
+        c = body.representative_point()
         o = Opening(f"C{len(openings) + 1:03d}", "window", "散线窗（凸窗/阳台窗）", round(c.x, 1), round(c.y, 1),
-                    round(a % 180, 2), round(max(e1, e2)), round(min(e1, e2)))
+                    round(a % 180, 2), round(hi - lo), round(max(ns) - min(ns)))
         o.exterior = True
         o._rooms = nb
-        o.polygon = _coords(f.convex_hull)
+        o.polygon = _coords(body.convex_hull)
         openings.append(o)
 
     # 房间
@@ -382,14 +495,25 @@ def recognize(dxf_path: str, region, wall_keep_min=180.0) -> dict:
         rooms.append(r)
         face_room[i] = r
 
-    # 门窗：编号文字、是否在外边、相邻房间
+    # 门窗编号：拼好的编号和门窗（含散线窗）一对一配对，宽度位对不上的不采用
+    matched = match_labels(openings, win_labels)
+    for oi, (s, _) in matched.items():
+        o = openings[oi]
+        o.label_raw = s
+        o.label = s if markcode.fits(s, o.width) else ""
+    used = collections.Counter(s for s, _ in matched.values())
+    unmatched = []
+    for s, x, y, _ in win_labels:
+        if used[s] > 0:
+            used[s] -= 1
+        else:
+            unmatched.append([s, round(x), round(y)])
+
+    # 门窗：是否在外边、相邻房间
     for o in openings:
         c = Point(o.x, o.y)
         nb = getattr(o, "_rooms", None)
         if nb is None:
-            if win_labels:
-                s, lx, ly = min(win_labels, key=lambda w: (w[1] - o.x) ** 2 + (w[2] - o.y) ** 2)
-                o.label = s if math.hypot(lx - o.x, ly - o.y) < 1500 else ""
             o.exterior = outer.distance(c) < 260
         for i, r in face_room.items():
             if (i in nb) if nb is not None else (faces[i].distance(c) < 220):
@@ -440,6 +564,7 @@ def recognize(dxf_path: str, region, wall_keep_min=180.0) -> dict:
         "walls": [asdict(w) for w in walls],
         "openings": [asdict(o) for o in openings],
         "axes": read_axes(msp, region),
+        "unmatched_labels": unmatched,   # 没配上门窗的原图编号 [文字, x, y]
     }
 
 
@@ -476,13 +601,42 @@ def to_svg(res: dict, out: str, width=1800):
         fh.write(svg)
 
 
-if __name__ == "__main__":
-    import sys
-    res = recognize(sys.argv[1], tuple(map(float, sys.argv[2:6])))
-    with open(sys.argv[6], "w", encoding="utf-8") as fh:
+def main(argv=None) -> None:
+    import argparse
+    ap = argparse.ArgumentParser(prog="python -m jiazhuang.dxfplan", allow_abbrev=False,
+                                 description="从打散的天正 DXF 平面识别房间、户、墙、门窗、轴网，写成识别 JSON（make_plan_set 的输入）。")
+    ap.add_argument("dxf", type=printing.existing_file, metavar="平面.dxf")
+    ap.add_argument("out", metavar="识别.json")
+    ap.add_argument("svg", nargs="?", metavar="检查图.svg", help="识别检查图：按户着色的房间、墙、门窗")
+    ap.add_argument("--region", nargs=4, type=float, required=True, metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
+                    help="这一层在图上的外包（图纸毫米），只识别完全落在里面的图元（一张 DXF 里常有好几层）")
+    ap.add_argument("--verbose", action="store_true", help="另外打印识别统计（调试用）")
+    a = ap.parse_args(argv)
+    res = recognize(a.dxf, tuple(a.region))
+    ops = res["openings"]
+    printing.log("recognized", "rooms", len(res["rooms"]), "units", len(res["units"]), "walls", len(res["walls"]),
+                 "doors", sum(o["kind"] == "door" for o in ops), "windows", sum(o["kind"] == "window" for o in ops),
+                 "labels", sum(bool(o["label"]) for o in ops))
+    if a.verbose:
+        _stats(res)
+    outs = [a.out] + ([a.svg] if a.svg else [])
+    if not res["rooms"] or not res["walls"]:
+        # --region 不是这一层在图上的外包（常见：忘了图纸坐标的偏移）：不写结果，旧的也删掉，免得下一步拿去出图
+        for p in outs:
+            if os.path.exists(p):
+                os.remove(p)
+        printing.log("failed", "no rooms or walls: check --region", os.path.abspath(a.out))
+        sys.exit(1)
+    for p in outs:
+        os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
+    with open(a.out, "w", encoding="utf-8") as fh:
         json.dump(res, fh, ensure_ascii=False, indent=1)
-    if len(sys.argv) > 7:
-        to_svg(res, sys.argv[7])
+    if a.svg:
+        to_svg(res, a.svg)
+    printing.done(a.out)
+
+
+def _stats(res: dict) -> None:
     C = collections.Counter
     print("faces", res["faces"], res["face_categories"], "footprint m2", res["footprint_area_m2"], "declared", res["declared_area_m2"])
     print("levels", res["levels"])
@@ -492,8 +646,15 @@ if __name__ == "__main__":
     print("no unit, not public", [(r["name"], r["area_m2"]) for r in res["rooms"] if not r["unit"] and not r["public"]])
     print("walls", len(res["walls"]), "keep", sum(w["keep"] for w in res["walls"]), "thickness", C(w["thickness"] // 10 * 10 for w in res["walls"]).most_common(10))
     print("openings", C((o["kind"], o["exterior"]) for o in res["openings"]))
+    print("labels adopted", C(o["label"] for o in res["openings"] if o["label"]).most_common(),
+          "rejected (size)", [(o["id"], o["label_raw"], o["width"]) for o in res["openings"] if o["label_raw"] and not o["label"]],
+          "unmatched", res["unmatched_labels"])
     bed = [r for r in res["rooms"] if any(n in ("主卧", "次卧", "书房", "卧室") for n in r["names"])]
     print("bed w/o ext", [(r["id"], r["name"], r["unit"], r["windows"], r["area_m2"]) for r in bed if not r["ext_windows"]])
     print("doors by leafs", C(o["leafs"] for o in res["openings"] if o["kind"] == "door"), "swing", C(o["swing"] for o in res["openings"] if o["kind"] == "door"))
     print("axes x", [a["label"] for a in res["axes"]["x"]], "y", [(a["label"], a["ends"]) for a in res["axes"]["y"]])
     print("bedrooms", len(bed), "with ext window", sum(1 for r in bed if r["ext_windows"]), "areas", sorted(r["area_m2"] for r in bed))
+
+
+if __name__ == "__main__":
+    main()

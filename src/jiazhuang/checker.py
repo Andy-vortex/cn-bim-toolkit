@@ -1,7 +1,7 @@
-"""规范检查引擎：读 IFC + 规则包（packs/cn/rules/*.json）→ 逐条结论 + HTML/PDF 报告。
+"""规范检查引擎：读 IFC + 规则包（packs/cn/rules/*.json）→ 逐条结论 + HTML 报告（PDF 由 printing.html_to_pdf 打印）。
 
 在 Blender 里用 Bonsai 自带的 ifcopenshell 和 shapely 运行（不用 bpy）：
-  blender -b --python scripts/check_ifc.py -- <ifc> <规则.json> <输出目录>
+  blender -b --python-exit-code 1 --python scripts/check_ifc.py -- <ifc> <规则.json> <输出目录> [工程名]
 
 规则包是纯数据：每条规则写明 `type`（下面 CHECKS 里的通用检查类型）和 `params`（用途关键字、阈值、说法）。
 引擎本身不认识任何具体标准，条文号和概括都在规则包里。
@@ -19,7 +19,7 @@ import html
 import json
 import math
 import os
-import subprocess
+import re
 
 import ifcopenshell
 import ifcopenshell.geom
@@ -30,9 +30,9 @@ import shapely
 from shapely.geometry import MultiPoint, Point, Polygon
 from shapely.ops import unary_union
 
-EDGE = r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"
+from . import printing
+
 STATUSES = ("不通过", "待确认", "信息不足", "人工复核", "通过", "不涉及")
-COLORS = {"通过": "#2e7d32", "不通过": "#c62828", "待确认": "#ef6c00", "信息不足": "#6a1b9a", "不涉及": "#757575", "人工复核": "#1565c0"}
 
 _GS = ifcopenshell.geom.settings()
 _GS.set("use-world-coords", True)
@@ -166,6 +166,18 @@ def _lbl(s):
     return f'{s["id"]} {s["usage"]}' + (f'（{s["unit"]}）' if s["unit"] else "")
 
 
+def _ref(e):
+    """报告里怎么指代一樘门窗：图上标的编号（Tag）在前，后面跟构件名（去掉名称里旧的占位编号，如"卫生间门 M3"→"卫生间门"），
+    这样不通过项能在图上找到；名称只是构件编号（M024 这类）时写成"· 构件 M024"，便于回查 IFC。没有 Tag 时照旧写名称。"""
+    name, tag = str(e.Name or ""), str(getattr(e, "Tag", None) or "")
+    if not tag:
+        return name
+    desc = re.sub(r"\s*\b[A-Z]{1,3}\d{1,4}[a-z]?$", "", name).strip()
+    if desc:
+        return f"{tag} {desc}"
+    return f"{tag} · 构件 {name}" if name and name != tag else tag
+
+
 def _beds(s):
     return [e for e in s["elements"] if kind(e) == "bed"]
 
@@ -229,7 +241,7 @@ def exterior_window(p, M):
         elif all(w["operable"] is False for w in ext):
             items.append(("不通过", _lbl(s), f"外窗 {len(ext)} 扇，均为固定扇"))
         else:
-            items.append(("待确认", _lbl(s), f"有外窗 {len(ext)} 扇（{'、'.join(w['e'].Name for w in ext)}），图上看不出能否开启"))
+            items.append(("待确认", _lbl(s), f"有外窗 {len(ext)} 扇（{'、'.join(_ref(w['e']) for w in ext)}），图上看不出能否开启"))
     return items or _none(p, "相关房间")
 
 
@@ -551,7 +563,7 @@ def door_clear_width(p, M):
         care = to_room and any(_is_care(x, p) for x in d["spaces"] if _has(x["usage"], rw))
         need = p.get("care_room_min_mm", p["min_mm"]) if care else (p.get("room_min_mm", p["min_mm"]) if to_room else p["min_mm"])
         what = "房间门（护理型）" if care else ("房间门" if to_room else "门")
-        items.append(("通过" if clear >= need - 1 else "不通过", f"{d['e'].Name}（{'/'.join(sorted(set(names)))}）",
+        items.append(("通过" if clear >= need - 1 else "不通过", f"{_ref(d['e'])}（{'/'.join(sorted(set(names)))}）",
                       f"{what}：洞口 {w:.0f}，{how}开启净宽约 {clear:.0f} mm（≥{need}）"))
     return items or _none(p, "相关的门")
 
@@ -586,61 +598,49 @@ def run(ifc_path: str, rules_path: str) -> dict:
 
 
 # ------------------------------------------------------------------ 报告
-def to_html(res: dict, path: str, project: str, extra_notes=()):
-    F, R = res["facts"], res["results"]
-    cnt = {st: sum(1 for r in R if r["status"] == st) for st in STATUSES}
-    chip = lambda st: f'<span class="chip" style="background:{COLORS[st]}">{st}</span>'
-    e = html.escape
-    rows = "".join(f'<tr><td>{e(r["clause"])}</td><td>{e(r["summary"])}</td><td>{ {"auto": "自动", "semi": "半自动", "manual": "人工"}[r["check"]] }</td>'
-                   f'<td>{chip(r["status"])}</td><td class="n">{sum(1 for i in r["items"] if i["status"] == "通过")}/{len(r["items"])}</td></tr>' for r in R)
-    det = []
-    for r in R:
-        if r["check"] == "manual":
-            continue
-        bad = [i for i in r["items"] if i["status"] not in ("通过", "不涉及")]
-        good = [i for i in r["items"] if i["status"] in ("通过", "不涉及")]
-        det.append(f'<h3>{e(r["clause"])} {chip(r["status"])} <small>{e(r["summary"])}</small></h3>')
-        if bad:
-            det.append("<table class='d'>" + "".join(f'<tr><td>{chip(i["status"])}</td><td>{e(i["target"])}</td><td>{e(i["detail"])}</td></tr>' for i in bad) + "</table>")
-        if good:
-            det.append(f'<p class="ok">{"通过" if any(i["status"] == "通过" for i in good) else "不涉及"} {len(good)} 项：'
-                       + "；".join(e(f'{i["target"]}（{i["detail"]}）') for i in good[:60]) + (" ……" if len(good) > 60 else "") + "</p>")
-    manual = "".join(f'<li>{e(r["clause"])} {e(r["summary"])}' + (f'<br><small>{e(r["items"][0]["detail"])}</small>' if r["items"] else "") + "</li>"
-                     for r in R if r["status"] == "人工复核")
-    sch = "".join(f"<li>{e(k)}：{e(str(v))}</li>" for k, v in F.get("scheme", {}).items())
-    lv = "；".join(f'{s["name"]}：{"、".join(f"{v:.3f}" for v in s["levels"])} m' for s in F["storeys"])
-    notes = "".join(f"<li>{e(n)}</li>" for n in extra_notes)
-    eff = f"（实施日期 {e(F['effective'])}）" if F.get("effective") else ""
-    doc = f"""<!doctype html><html><head><meta charset="utf-8"><title>{e(F['standard'])} 检查报告</title><style>
-@page {{ size: A4; margin: 14mm 13mm; }}
-body {{ font-family: 'Microsoft YaHei', 'SimSun', sans-serif; font-size: 10.5pt; color: #222; }}
-h1 {{ font-size: 17pt; margin: 0 0 4px; }} h2 {{ font-size: 13pt; border-bottom: 2px solid #333; padding-bottom: 2px; margin-top: 18px; }}
-h3 {{ font-size: 11pt; margin: 12px 0 4px; }} h3 small {{ font-weight: normal; color: #555; }}
-.chip {{ color: #fff; border-radius: 3px; padding: 0 5px; font-size: 9pt; white-space: nowrap; }}
-table {{ border-collapse: collapse; width: 100%; }} td, th {{ border: 1px solid #bbb; padding: 3px 5px; vertical-align: top; }}
-th {{ background: #f0f0f0; }} td.n {{ text-align: center; white-space: nowrap; }} table.d td:first-child {{ width: 52px; }}
-.sum span {{ margin-right: 12px; }} .ok {{ color: #444; font-size: 9pt; }} .warn {{ background: #fff8e1; border: 1px solid #f0c36d; padding: 6px 10px; }}
-ul {{ margin: 4px 0; padding-left: 20px; }}
-</style></head><body>
-<h1>{e(F['standard'])}《{e(F['title'])}》自动检查报告</h1>
-<div>{e(project)} ｜ 模型 {e(F['ifc'])} ｜ 规则 {e(F['rules'])}{eff}｜ {e(F['date'])}</div>
-<p class="warn">本报告由程序根据 IFC 模型自动生成，只做设计自查提示，<b>不替代建筑、结构、消防等专业审查</b>；条文概括为规则包作者自拟，原文以标准文本为准。{('<br>条文来源：' + e(F['source'])) if F.get('source') else ''}</p>
-<h2>一、结论汇总</h2>
-<p class="sum">{''.join(f'<span>{chip(st)} {cnt[st]} 条</span>' for st in STATUSES)}</p>
-<table><tr><th>条文</th><th>要求（概括）</th><th>方式</th><th>结论</th><th>通过/检查项</th></tr>{rows}</table>
-<h2>二、模型概况</h2>
-<ul><li>空间 {F['spaces']} 个，床位 {F['beds']} 张</li><li>楼层与标高：{e(lv)}</li>{sch}{notes}</ul>
-<h2>三、逐条明细</h2>{''.join(det)}
-<h2>四、人工复核清单</h2><ul>{manual}</ul>
-<h2>五、相关标准</h2><ul>{''.join(f'<li>{e(x)}</li>' for x in F['related'])}</ul>
-</body></html>"""
+STATUS_CLASS = {"不通过": "fail", "待确认": "warn", "信息不足": "warn"}   # 其余结论不上色
+REPORT_CSS = printing.A4_CSS + ".sum span{margin-right:16pt}.sum b{font-size:18pt;margin-right:2pt}td div{font-size:9pt}.n{text-align:right;white-space:nowrap}"
+
+
+def _shown(target: str) -> str:
+    """显示用的对象名："-" 不写；编号和用途相同时（"客厅 客厅"）只写一次。只改显示，JSON 里的 target 不动。"""
+    return "" if target == "-" else re.sub(r"^(\S+) \1(?=$|[ （])", r"\1", target)
+
+
+def to_html(res: dict, path: str, project: str | None = None):
+    """自查报告页：按结论分组，不通过在前，组内按规则包的顺序；每行"条文 | 要求（概括）| 通过/检查项"，
+    没通过的项逐条列在要求下面，通过和不涉及的项并成一行灰字。末尾内嵌和 .json 同源的完整数据。"""
+    F, R, e = res["facts"], res["results"], html.escape
+    cls = lambda st: f' class="{STATUS_CLASS[st]}"' if st in STATUS_CLASS else ""
+    groups = [(st, [r for r in R if r["status"] == st]) for st in STATUSES]
+    groups = [(st, g) for st, g in groups if g]
+    meta = (project, F["ifc"], F["rules"], F["date"], F.get("effective") and f'{F["effective"]} 实施',
+            f'空间 {F["spaces"]}', F["beds"] and f'床位 {F["beds"]}')
+    out = [f'<h1>{e(F["standard"])}《{e(F["title"])}》</h1>',
+           '<p class="minor">' + " · ".join(e(str(x)) for x in meta if x) + "</p>",
+           '<p class="sum">' + "".join(f"<span{cls(st)}><b>{len(g)}</b>{st}</span>" for st, g in groups) + "</p>",
+           "<table><thead><tr><th>条文</th><th>要求（概括）</th><th>通过/检查项</th></tr></thead>"]
+    for st, g in groups:
+        out.append(f'<tbody><tr><th colspan="3"{cls(st)}>{st} {len(g)}</th></tr>')
+        for r in g:
+            lines = []
+            for i in (i for i in r["items"] if i["status"] not in ("通过", "不涉及")):
+                t = _shown(i["target"])
+                lines.append("<div>" + (f'<span{cls(i["status"])}>{i["status"]}</span> ' if i["status"] != st else "")
+                             + (e(t) + "：" if t else "") + e(i["detail"]) + "</div>")
+            good = [i for i in r["items"] if i["status"] in ("通过", "不涉及")]
+            if good:
+                head = "" if st in ("通过", "不涉及") else f'{"通过" if any(i["status"] == "通过" for i in good) else "不涉及"} {len(good)} 项：'
+                lines.append(f'<div class="minor">{head}' + "；".join(
+                    e(f'{_shown(i["target"])}（{i["detail"]}）' if _shown(i["target"]) else i["detail"]) for i in good[:60])
+                    + (" ……" if len(good) > 60 else "") + "</div>")
+            n = "" if st in ("人工复核", "不涉及") else f'{sum(1 for i in r["items"] if i["status"] == "通过")}/{len(r["items"])}'
+            out.append(f'<tr><td>{e(r["clause"])}</td><td>{e(r["summary"])}{"".join(lines)}</td><td class="n">{n}</td></tr>')
+        out.append("</tbody>")
+    out.append("</table>")
+    foot = "自查提示，不替代专业审查；条文为概括，以标准原文为准。" + (f'条文来源：{F["source"]}。' if F.get("source") else "") \
+        + ("相关标准：" + "；".join(F["related"]) + "。" if F.get("related") else "")
+    out.append(f'<p class="minor">{e(foot)}</p>')
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write(doc)
+        fh.write(printing.page(f'{F["standard"]} 自查报告', "".join(out), data=res, css=REPORT_CSS))
     return path
-
-
-def to_pdf(html_path: str, pdf_path: str):
-    url = "file:///" + os.path.abspath(html_path).replace("\\", "/")
-    subprocess.run([EDGE, "--headless=new", "--disable-gpu", "--no-pdf-header-footer", f"--print-to-pdf={os.path.abspath(pdf_path)}", url],
-                   timeout=180, capture_output=True)
-    return os.path.exists(pdf_path) and os.path.getsize(pdf_path)

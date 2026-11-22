@@ -7,15 +7,20 @@
   - 封堵门洞：原门洞砌死；
   - 新砌卫生间：在房间角落用 100 厚隔墙围出一间。
 所有坐标为图纸毫米，几何用 shapely。被拆掉的墙块记在 demolish 里（出图画红色虚线），新砌墙 status="新砌"（出图画斜线）。
+拆改清单（changes）出成 A4 页面见 to_html。
 """
 from __future__ import annotations
 
+import html
 import math
 
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import unary_union
 
+from . import printing
+
 PARTITION_MAX_T = 180.0
+DECIDE_FIRST = ("需结构确认", "无法加宽")   # 要人拍板的改动类型：拆改清单里排在最前
 WC_SIZE = (1800.0, 2100.0)   # 新砌专用卫生间外包（含两面 100 隔墙），净尺寸约 1700×2000
 WC_WALL = 100.0
 DOOR_NEW = 900.0             # 新开门洞宽（平开门开启净宽约 800）
@@ -40,6 +45,30 @@ def _axis(g):
     l1, l2 = math.hypot(*e1), math.hypot(*e2)
     e = e1 if l1 >= l2 else e2
     return math.degrees(math.atan2(e[1], e[0])) % 180, max(l1, l2) / max(min(l1, l2), 1.0), max(l1, l2)
+
+
+def to_html(changes: list, path: str, project: str = "", date: str = "") -> str:
+    """拆改清单页：按类型分组（要人拍板的在前，其余按首次出现的顺序），每行"分区 | 对象 | 内容"（整张表都没有分区时
+    不要分区列）；判断依据一句放在页脚。末尾内嵌 changes 原样的 JSON。"""
+    e = html.escape
+    zone = lambda c: c.get("core") or c.get("zone") or ""
+    types = sorted(dict.fromkeys(c["type"] for c in changes),
+                   key=lambda t: DECIDE_FIRST.index(t) if t in DECIDE_FIRST else len(DECIDE_FIRST))
+    zoned = any(zone(c) for c in changes)
+    cols = (["分区"] if zoned else []) + ["对象", "内容"]
+    out = ["<h1>拆改清单</h1>", '<p class="minor">' + " · ".join(e(x) for x in (project, date) if x) + "</p>",
+           "<table><thead><tr>" + "".join(f"<th>{c}</th>" for c in cols) + "</tr></thead>"]
+    for t in types:
+        g = [c for c in changes if c["type"] == t]
+        warn = ' class="warn"' if t in DECIDE_FIRST else ""
+        out.append(f'<tbody><tr><th colspan="{len(cols)}"{warn}>{e(t)} {len(g)}</th></tr>')
+        out += ["<tr>" + (f"<td>{e(zone(c))}</td>" if zoned else "") + f'<td>{e(c["target"])}</td><td>{e(c["detail"])}</td></tr>' for c in g]
+        out.append("</tbody>")
+    out.append(f'</table><p class="minor">墙厚 &lt;{PARTITION_MAX_T:g}mm 按非承重隔墙处理，厚墙、外墙不动；新砌卫生间需新接给排水；'
+               '须结构、给排水专业复核。</p>')
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(printing.page("拆改清单", "".join(out), data=changes))
+    return path
 
 
 def opening_rect(x, y, rot, width, depth):
@@ -92,9 +121,6 @@ class Renovator:
                 out.append(min(hit, key=lambda rid: self.P(rid).area))
         self._sr[key] = out
         return out
-
-    def doors_between(self, a, b):
-        return [o for o in self.ops.values() if o["kind"] == "door" and set(self.side_rooms(o)) == {a, b}]
 
     def doors_of(self, rid):
         return [o for o in self.ops.values() if o["kind"] == "door" and rid in self.side_rooms(o)]

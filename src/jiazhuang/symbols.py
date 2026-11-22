@@ -21,11 +21,75 @@ for _m in ("root", "context", "geometry", "type", "spatial"):
     importlib.import_module("ifcopenshell.api." + _m)
 
 M = 0.001  # mm -> m
+# 图上标安装高度（H300）的点位：图例写类型的默认高度，图上只标和它不同的（drawset.add_legend、annotate.point_heights）
+HEIGHT_CLASSES = ("IfcOutlet", "IfcSwitchingDevice")
 
 
 def load_pack(path: str) -> dict:
     with open(path, encoding="utf-8") as fh:
         return json.load(fh)["types"]
+
+
+def default_heights(path: str) -> dict[str, float]:
+    """符号键 → 默认安装高度（毫米，symbols.json 的 default_height）：图例和 point_heights 读的是同一份。"""
+    return {k: s["default_height"] for k, s in load_pack(path).items() if "default_height" in s}
+
+
+def paper_scales(path: str) -> dict[str, float]:
+    """符号键 → paper_scale（symbols.json）：这些点位符号在任何比例下都按 1:paper_scale 时的纸面大小画。"""
+    return {k: s["paper_scale"] for k, s in load_pack(path).items() if s.get("paper_scale")}
+
+
+# 按纸面大小画的点位符号的变体（符号键后缀）：原样、左右镜像（开关的斜线朝另一侧）、整个画到插入点一侧（贴着墙角的点位，
+# 居中画会压进相邻的墙）。Bonsai 的 SYMBOL 只认转角、不认镜像，所以镜像和挪到一侧都做成另一个定义（drawset._paper_symbols 选）
+VARIANTS = ("", "_m", "_r", "_l", "_m_r", "_m_l")
+
+
+def base_key(key: str) -> str:
+    """符号变体的键（cn_switch_1_m）→ 符号库的键（cn_switch_1）。"""
+    for suf in sorted(VARIANTS, key=len, reverse=True):
+        if suf and key.endswith(suf):
+            return key[:-len(suf)]
+    return key
+
+
+def variant_polylines(spec: dict, suffix: str = "") -> list[list[tuple[float, float]]]:
+    """符号变体的折线（实际毫米，局部坐标）：_m 左右镜像（x → -x）；_r、_l 整个平移到插入点的 +x、-x 一侧（最左、最右的笔画
+    正好过插入点）。"""
+    pls = [pts for it in spec["items"] for pts in item_polylines(it)]
+    if suffix.startswith("_m"):
+        pls = [[(-x, y) for x, y in pl] for pl in pls]
+    if suffix.endswith(("_r", "_l")):
+        xs = [x for pl in pls for x, _ in pl]
+        dx = -min(xs) if suffix.endswith("_r") else -max(xs)
+        pls = [[(x + dx, y) for x, y in pl] for pl in pls]
+    return pls
+
+
+def variants(spec: dict) -> list[str]:
+    """这个符号有哪些变体（后缀）：左右对称的符号（镜像后每段线都还在）不要镜像的那几个。"""
+    def segs(pls):
+        r = lambda p: (round(p[0], 1) + 0.0, round(p[1], 1) + 0.0)
+        return sorted(tuple(sorted((r(a), r(b)))) for pl in pls for a, b in zip(pl, pl[1:]))
+    sym = segs(variant_polylines(spec)) == segs(variant_polylines(spec, "_m"))
+    return [s for s in VARIANTS if not (sym and s.startswith("_m"))]
+
+
+def svg_defs(pack: dict) -> list[str]:
+    """有 paper_scale 的符号做成 Bonsai symbols.svg 的条目 <g id="符号键">（纸面毫米，y 朝下），出图时的 SYMBOL 标注
+    （drawset.add_view）用 <use> 引用；每个符号连同它的变体（VARIANTS：镜像、画到插入点一侧）各一条。和 Bonsai 的模型线一样
+    每段一条线，线型由约定包 cn.css 里同名的 IFC 类（.IfcOutlet 等）决定：和 1:paper_scale 的模型线、图例是同一份图形。"""
+    out = []
+    for key, spec in pack.items():
+        d = spec.get("paper_scale")
+        if not d:
+            continue
+        cls = spec["ifc_type"][:-4]
+        for suf in variants(spec):
+            segs = [(a, b) for pts in variant_polylines(spec, suf) for a, b in zip(pts, pts[1:])]
+            path = " ".join(f"M {a[0] / d:.4f},{-a[1] / d:.4f} L {b[0] / d:.4f},{-b[1] / d:.4f}" for a, b in segs)
+            out.append(f'<g id="{key}{suf}" class="{cls}"><path class="{cls}" d="{path}"/></g>')
+    return out
 
 
 def _arc_pts(cx, cy, r, a0, a1, step_deg=10.0):

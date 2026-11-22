@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Drawing markers of the cn drawing pack. MIT licence, see LICENSE at the repository root.
+     src/jiazhuang/drawset.py configure_project copies Bonsai's own markers.svg into the output and replaces the markers
+     that have the same id as a marker below. Units are paper mm (markerUnits="userSpaceOnUse"). -->
+<svg xmlns="http://www.w3.org/2000/svg">
+  <!-- Level symbol, GB/T 50001-2017 section 11.8 (used by GB/T 50104): isosceles right triangle drawn with a thin line,
+       3 mm high. It hangs under the right end of the level line; the level is written above the line. -->
+  <marker id="plan-level-marker" markerUnits="userSpaceOnUse" markerWidth="6" markerHeight="3" refX="6" refY="0" orient="0" overflow="visible">
+    <path d="M 0 0 L 6 0 L 3 3 Z" style="fill:none; stroke:black; stroke-width:0.18;" />
+  </marker>
+  <!-- Leader end for tags and point heights written beside their object (Bonsai TEXT_LEADER): a small filled dot,
+       0.8 mm across, where the leader meets the object, instead of Bonsai's arrow head. -->
+  <marker id="leader-marker" markerUnits="userSpaceOnUse" markerWidth="0.8" markerHeight="0.8" refX="0.4" refY="0.4" orient="auto" overflow="visible">
+    <circle cx="0.4" cy="0.4" r="0.4" style="fill:black; stroke:none;" />
+  </marker>
+</svg>

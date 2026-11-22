@@ -4,6 +4,10 @@
 - 坐标：图纸坐标（mm）减去原点偏移 (OX, OY) 再写入；偏移量记在 IfcSite 的 JZ_Source 属性集里，可以追溯回原图。
 - 墙、房间（IfcSpace）、凸窗：多边形拉伸（IfcArbitraryClosedProfileDef + IfcExtrudedAreaSolid，项目单位毫米）。
 - 普通门窗：ifcopenshell 参数化门窗（项目单位毫米），不挖洞——识别出的墙段本来就在洞口处断开。
+  识别结果没有门窗高度：原图编号（如 FM乙1121、TC1818）的宽度位与洞口宽相差 ≤1dm 的才采用，写进 JZ_Opening.Label
+  （openings 编号时优先用它做 Tag），高度取编号后两位；否则用默认值。来源记在 JZ_Opening.HeightSource（"原图编号"/"默认值"），
+  门窗表据此注明"待实测"；对不上的原图编号不采用，备注写进 JZ_Opening.LabelNote。防火门类代号（FM/FD/FH）记防火等级。
+  默认高度、窗台高取约定包 conventions.json；识别结果没有窗台高，窗都记 JZ_Opening.SillSource="默认值"。
 - 床和设施：约定包的符号类型（symbols.json），实例放进所在的 IfcSpace。
 - 一个标准层代表多层时：楼层放在第一个标高上，全部标高写在 JZ_Storey.Levels_m 里，规范检查按最高标高判。
 """
@@ -18,6 +22,10 @@ import numpy as np
 import ifcopenshell
 import ifcopenshell.api as api
 
+from . import conventions
+from . import markcode
+from . import scheme
+from .printing import log
 from . import symbols as sym
 
 for _m in ("project", "root", "unit", "context", "aggregate", "geometry", "spatial", "material", "pset", "type"):
@@ -26,8 +34,13 @@ for _m in ("project", "root", "unit", "context", "aggregate", "geometry", "spati
 M = 0.001
 STOREY_H = 3000.0
 SPACE_H = 2800.0
-DOOR_H = 2100.0
-WIN_SILL, WIN_H = 900.0, 1500.0
+# 识别结果没有的门窗高度、窗台高：用约定包 conventions.json 的默认值（openings 统计门窗表时用的是同一份）
+_OPC = conventions.get("openings")
+DOOR_H = float(_OPC["default_height_mm"]["door"])
+WIN_H = float(_OPC["default_height_mm"]["window"])
+BAY_H = float(_OPC["default_height_mm"]["bay"])
+WIN_SILL = float(_OPC["default_sill_mm"]["window"])
+BAY_SILL = float(_OPC["default_sill_mm"]["bay"])
 
 
 def _matrix(x, y, z, rot_deg):
@@ -68,7 +81,30 @@ def _pset(f, product, name, props):
     api.pset.edit_pset(f, pset=p, properties=props)
 
 
+def _orig_label(o: dict, width: float, width0: float | None = None):
+    """识别结果里的原图编号 → (采用的编号, 备注)。width0 是拆改前的识别宽度：拆改改了洞口宽度的，原图编号说的是
+    改前的洞口，一律不沿用（哪怕只差 1dm、编号还"对得上"）；宽度位与洞口宽相差 1dm 以上的不采用，备注写明待核。"""
+    lab, raw = o.get("label") or "", o.get("label_raw") or o.get("label") or ""
+    if not raw:
+        return "", ""
+    if width0 is not None and abs(width0 - width) > 1.0:
+        return "", f"原图编号 {raw} 为拆改前的洞口，未沿用"
+    if lab and markcode.fits(lab, width):
+        return lab, ""
+    if markcode.parse(raw) is None:
+        return "", f"原图编号文字 {raw} 不是完整编号，未采用（待核）"
+    return "", f"原图编号 {raw} 与识别尺寸不符，未采用（待核）"
+
+
+def _label_height(label: str, width: float):
+    """采用的原图编号（代号 + 宽高各两位分米，如 FM乙1121、C1815、TC1818）→ 编号里的高度（毫米）；宽度对不上返回 None。"""
+    p = markcode.parse(label)
+    return float(p["h"]) if p and markcode.fits(label, width) else None
+
+
 def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: str, building_name: str = "楼栋") -> dict:
+    """rec 传拆改前的识别结果（原图）；方案有拆改（sch["after"]）时几何用拆改后的，原图编号按拆改前的洞口宽判断。"""
+    width0 = {o["id"]: o["width"] for o in rec["openings"]}   # 拆改前的识别宽度（拆改改了宽度的，原图编号不沿用）
     rec = sch.get("after") or rec          # 有拆改时用拆改后的几何
     f = api.project.create_file(version="IFC4")
     project = api.root.create_entity(f, ifc_class="IfcProject", name=project_name)
@@ -108,7 +144,9 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
     def contain(p, where=storey):
         api.spatial.assign_container(f, relating_structure=where, products=[p])
 
-    # 分区范围：按方案里各分区（zone，旧方案里叫 core）的房间外包；构件按 x 归到最近的分区，记在 JZ_Zone.Block，出分图时按它过滤
+    # 分区范围：按方案里各分区（zone，旧方案里叫 core）的房间外包；构件按 x 归到最近的分区，记在 JZ_Zone.Block，出分图时按它过滤。
+    # 出图自动切的分段（zones 里 auto=True）不是设计分区：只写 JZ_Zone.Block，归属规则和 scheme.split_zones 相同（scheme.zone_at）
+    auto = [z for z in (sch.get("zones") or []) if z.get("auto")]
     polys = {r["id"]: r["polygon"] for r in rec["rooms"]}
     spans = {}
     for r in sch["rooms"]:
@@ -119,7 +157,9 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
             spans[zid] = (min(lo, min(xs_)), max(hi, max(xs_)))
 
     def zone(p, x_mm):
-        if spans:
+        if auto:
+            _pset(f, p, "JZ_Zone", {"Block": scheme.zone_at(auto, x_mm)})
+        elif spans:
             k = min(spans, key=lambda k: 0 if spans[k][0] <= x_mm <= spans[k][1] else min(abs(x_mm - spans[k][0]), abs(x_mm - spans[k][1])))
             _pset(f, p, "JZ_Zone", {"Block": k})
 
@@ -173,7 +213,7 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
         api.geometry.assign_representation(f, product=sp, representation=_prism(f, body, ring, 0, SPACE_H))
         api.geometry.edit_object_placement(f, product=sp, matrix=_matrix(0, 0, z0, 0))
         api.aggregate.assign_object(f, relating_object=storey, products=[sp])
-        lx, ly = u.get("label") or ring[0]
+        lx, ly = u.get("label") or scheme.label_point(r["polygon"])   # 图纸坐标（ring 已减过偏移，不能拿来比）
         props = {"Usage": u["usage"], "OriginalName": u.get("orig_name", ""), "Unit": u.get("unit", ""), "UnitType": u.get("unit_type", ""),
                  "Zone": u.get("zone") or u.get("core", ""), "Public": bool(u.get("public")), "NetArea_m2": float(u["area_m2"]),
                  "Note": u.get("note", ""), "LabelX_mm": float(lx - OX), "LabelY_mm": float(ly - OY)}
@@ -182,7 +222,7 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
         if u.get("care_type"):
             props["CareType"] = u["care_type"]
         _pset(f, sp, "JZ_Space", props)
-        zone(sp, sum(q[0] for q in ring) / len(ring) + OX)
+        zone(sp, lx if auto else sum(q[0] for q in ring) / len(ring) + OX)   # 自动分段：房间按标注点归段（只在这一段写房名）
         q = api.pset.add_qto(f, product=sp, name="Qto_SpaceBaseQuantities")
         api.pset.edit_qto(f, qto=q, properties={"NetFloorArea": float(u["area_m2"])})
         spaces[r["id"]] = sp
@@ -191,22 +231,29 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
     n_door = n_win = 0
     for o in rec["openings"]:
         rooms = ",".join(o["rooms"])
+        w = float(o["width"])
+        lab, lab_note = _orig_label(o, w, width0.get(o["id"]))
+        lab_h = _label_height(lab, w)   # 原图编号里带的高度；没有就用默认值，门窗表里注明待实测
+        hsrc = "原图编号" if lab_h else "默认值"
+        jz_lab = dict({"Label": lab}, **({"LabelNote": lab_note} if lab_note else {}))
         if o["polygon"]:  # 凸窗、散线窗
             ring = _ring(o["polygon"], OX, OY)
+            bay_h = lab_h or BAY_H
             e = api.root.create_entity(f, ifc_class="IfcWindow", name=o["id"])
             e.ObjectType = "BAY"
             e.PredefinedType = "WINDOW"
-            e.OverallWidth, e.OverallHeight = float(o["width"]), 1900.0
-            api.geometry.assign_representation(f, product=e, representation=_prism(f, body, ring, 450, 1900))
+            e.OverallWidth, e.OverallHeight = w, bay_h
+            api.geometry.assign_representation(f, product=e, representation=_prism(f, body, ring, BAY_SILL, bay_h))
             api.geometry.assign_representation(f, product=e, representation=_curve2d(f, plan_body, [ring]))
             api.geometry.edit_object_placement(f, product=e, matrix=_matrix(0, 0, z0, 0))
             contain(e)
             _pset(f, e, "Pset_WindowCommon", {"IsExternal": True})
-            _pset(f, e, "JZ_Opening", {"Kind": "凸窗/散线窗", "Operable": "未知", "Rooms": rooms, "Source": o["block"]})
+            _pset(f, e, "JZ_Opening", dict({"Kind": "凸窗/散线窗", "Operable": "未知", "Rooms": rooms, "Source": o["block"],
+                                            "HeightSource": hsrc, "SillSource": "默认值"}, **jz_lab))
             zone(e, o["x"])
             n_win += 1
             continue
-        w, t = float(o["width"]), float(o["wall_t"] or 200.0)
+        t = float(o["wall_t"] or 200.0)
         if o["kind"] == "door":
             # 局部 +y = 开启一侧（ifcopenshell 门的约定：门框占 y∈[0,t]，门扇向 +y 开；LEFT 铰链在 x=0，RIGHT 在 x=宽）
             s_ = o.get("swing", 1) or 1
@@ -224,36 +271,39 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
             e = api.root.create_entity(f, ifc_class="IfcDoor", name=o["id"])
             lining = {"LiningDepth": t, "LiningThickness": 50.0, "LiningOffset": 0.0}
             try:
-                reps = [api.geometry.add_door_representation(f, context=ctx, overall_height=DOOR_H, overall_width=w,
+                reps = [api.geometry.add_door_representation(f, context=ctx, overall_height=lab_h or DOOR_H, overall_width=w,
                                                              operation_type=op, lining_properties=lining) for ctx in (body, plan_body)]
             except Exception as ex:   # 个别开启方式要额外参数，退回单扇平开
-                print("JZLOG door rep fallback", o["id"], op, ex)
+                log("door rep fallback", o["id"], op, ex)
                 op = "SINGLE_SWING_LEFT"
-                reps = [api.geometry.add_door_representation(f, context=ctx, overall_height=DOOR_H, overall_width=w,
+                reps = [api.geometry.add_door_representation(f, context=ctx, overall_height=lab_h or DOOR_H, overall_width=w,
                                                              operation_type=op, lining_properties=lining) for ctx in (body, plan_body)]
             e.PredefinedType, e.OperationType = "DOOR", op
-            e.OverallWidth, e.OverallHeight = w, DOOR_H
+            e.OverallWidth, e.OverallHeight = w, lab_h or DOOR_H
             for rep in reps:
                 api.geometry.assign_representation(f, product=e, representation=rep)
             api.geometry.edit_object_placement(f, product=e, matrix=_matrix(ox_, oy_, z0, rot))
             contain(e)
-            _pset(f, e, "Pset_DoorCommon", {"IsExternal": bool(o["exterior"])})
-            _pset(f, e, "JZ_Opening", {"Kind": "门", "Label": o["label"], "Rooms": rooms, "Source": o["block"], "ClearWidthEst_mm": w - 100.0})
+            fire = markcode.fire_rating(lab)   # 防火门类代号 FM/FD/FH → 甲/乙/丙级（没写等级为"待定"）
+            _pset(f, e, "Pset_DoorCommon", dict({"IsExternal": bool(o["exterior"])}, **({"FireRating": fire} if fire else {})))
+            _pset(f, e, "JZ_Opening", dict({"Kind": "门", "Rooms": rooms, "Source": o["block"], "ClearWidthEst_mm": w - 100.0,
+                                            "HeightSource": hsrc}, **jz_lab))
             zone(e, o["x"])
             n_door += 1
         else:
             e = api.root.create_entity(f, ifc_class="IfcWindow", name=o["id"])
             e.PredefinedType, e.PartitioningType = "WINDOW", "SINGLE_PANEL"
-            e.OverallWidth, e.OverallHeight = w, WIN_H
+            e.OverallWidth, e.OverallHeight = w, lab_h or WIN_H
             lining = {"LiningDepth": 80.0, "LiningThickness": 50.0, "LiningOffset": max((t - 80.0) / 2, 0.0)}
             for ctx in (body, plan_body):
-                rep = api.geometry.add_window_representation(f, context=ctx, overall_height=WIN_H, overall_width=w,
+                rep = api.geometry.add_window_representation(f, context=ctx, overall_height=lab_h or WIN_H, overall_width=w,
                                                              partition_type="SINGLE_PANEL", lining_properties=lining)
                 api.geometry.assign_representation(f, product=e, representation=rep)
             api.geometry.edit_object_placement(f, product=e, matrix=_matrix(ox_, oy_, z0 + WIN_SILL, rot))
             contain(e)
             _pset(f, e, "Pset_WindowCommon", {"IsExternal": bool(o["exterior"])})
-            _pset(f, e, "JZ_Opening", {"Kind": "窗", "Label": o["label"], "Operable": "未知", "Rooms": rooms, "Source": o["block"]})
+            _pset(f, e, "JZ_Opening", dict({"Kind": "窗", "Operable": "未知", "Rooms": rooms, "Source": o["block"],
+                                            "HeightSource": hsrc, "SillSource": "默认值"}, **jz_lab))
             zone(e, o["x"])
             n_win += 1
 
