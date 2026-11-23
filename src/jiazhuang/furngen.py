@@ -81,13 +81,14 @@ def shape(spec: dict, p: dict) -> dict:
     elif r == "counter":
         if "basin" in p:                                                              # 浴室柜：台盆
             bx = -w / 2 + (p["basin"] if p.get("basin") is not None else w / 2)
-            lines.append(_ellipse(bx, d / 2 + 10, min(0.3 * w, 230), 0.3 * d))
+            lines.append(_ellipse(bx, d / 2 + 10, part_half(p, "basin"), 0.3 * d))
         else:                                                                         # 橱柜：水槽、灶台
             pos = positions(p)
             m = -1 if p.get("side") == "right" else 1   # 镜像前的坐标：右侧转角的最后整体镜像
             sx, hx = m * (-w / 2 + pos["sink"]), m * (-w / 2 + pos["hob"])
-            lines += [_closed(_rect(sx - 350, d / 2 - 210, sx + 350, d / 2 + 210)), _closed(_rect(sx - 320, d / 2 - 180, sx + 320, d / 2 + 180))]
-            lines += [_closed(_rect(hx - 350, d / 2 - 220, hx + 350, d / 2 + 220)), _circle(hx - 170, d / 2, 100), _circle(hx + 170, d / 2, 100)]
+            hs, hh = part_half(p, "sink"), part_half(p, "hob")
+            lines += [_closed(_rect(sx - hs, d / 2 - 210, sx + hs, d / 2 + 210)), _closed(_rect(sx - hs + 30, d / 2 - 180, sx + hs - 30, d / 2 + 180))]
+            lines += [_closed(_rect(hx - hh, d / 2 - 220, hx + hh, d / 2 + 220)), _circle(hx - 170, d / 2, 100), _circle(hx + 170, d / 2, 100)]
     elif r == "shower":
         lines.append(_closed(_rect(-w / 2 + 50, 50, w / 2 - 50, d - 50)))
         lines.append([(-w / 2 + 50, d - 50), (w / 2 - 50, 50)])
@@ -120,6 +121,14 @@ def _run(p):
     w, d, ret = p["width"], p["depth"], p.get("return") or 0
     corner = ret > d
     return (d if corner and p.get("side") != "right" else 0.0), (w - d if corner and p.get("side") == "right" else w)
+
+
+PART_HALF = {"sink": 350.0, "hob": 350.0}   # 水槽、灶台沿台面的半宽（画法和 mep 台面插座避让共用）
+
+
+def part_half(p: dict, part: str) -> float:
+    """部件沿台面的半宽：水槽、灶台 350，台盆是台面宽的 0.3、最多 230。"""
+    return min(0.3 * p["width"], 230.0) if part == "basin" else PART_HALF[part]
 
 
 def positions(p: dict) -> dict:

@@ -15,31 +15,16 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 from jiazhuang import printing  # noqa: E402
 
 
-def read_json(p: str, what: str, need=()):
-    """argparse 的 type：文件要在，是 JSON 对象，有 need 里的键（非空），否则报一行错（退出码 2）。"""
-    try:
-        with open(printing.existing_file(p), encoding="utf-8") as fh:
-            d = json.load(fh)
-    except ValueError:
-        d = None
-    if not isinstance(d, dict):
-        raise argparse.ArgumentTypeError(f"不是{what} JSON：{p}")
-    miss = [k for k in need if not d.get(k)]
-    if miss:
-        raise argparse.ArgumentTypeError(f"{what}里没有 {'、'.join(miss)}：{p}")
-    return d
-
-
 def main(argv=None):
     p = argparse.ArgumentParser(prog="python scripts/furnish.py", allow_abbrev=False,
                                 description="家具布置：房间摘要（context）；布置意图 → 带家具的方案 + 校验报告（place）。")
     sub = p.add_subparsers(dest="cmd", required=True)
-    rec_t = lambda s: read_json(s, "识别结果", ("rooms", "walls"))
-    sch_t = lambda s: read_json(s, "方案")
+    rec_t = lambda s: printing.read_json(s, "识别结果", ("rooms", "walls"))
+    sch_t = lambda s: printing.read_json(s, "方案")
 
     def intent_t(s):   # 意图的结构（rooms 是对象列表……）在解析参数时就查：结构不对退出 2，单件写错留给 place 报
         from jiazhuang import furnish
-        d = read_json(s, "布置意图")
+        d = printing.read_json(s, "布置意图")
         try:
             furnish.check_intent(d)
         except furnish.IntentError as e:

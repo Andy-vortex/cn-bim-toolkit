@@ -14,11 +14,13 @@ import importlib
 import json
 import math
 
-import ifcopenshell
-import ifcopenshell.api as api
-
-for _m in ("root", "context", "geometry", "type", "spatial"):
-    importlib.import_module("ifcopenshell.api." + _m)
+try:   # 建 IFC 类型在 Blender 里跑；符号的折线和变体只要标准库，.venv 里也能用
+    import ifcopenshell
+    import ifcopenshell.api as api
+    for _m in ("root", "context", "geometry", "type", "spatial", "pset"):
+        importlib.import_module("ifcopenshell.api." + _m)
+except ImportError:
+    ifcopenshell = None
 
 M = 0.001  # mm -> m
 # 图上标安装高度（H300）的点位：图例写类型的默认高度，图上只标和它不同的（drawset.add_legend、annotate.point_heights）
@@ -47,8 +49,11 @@ def paper_scales(path: str) -> dict[str, float]:
 
 
 # 按纸面大小画的点位符号的变体（符号键后缀）：原样、左右镜像（开关的斜线朝另一侧）、整个画到插入点一侧（贴着墙角的点位，
-# 居中画会压进相邻的墙）。Bonsai 的 SYMBOL 只认转角、不认镜像，所以镜像和挪到一侧都做成另一个定义（drawset._paper_symbols 选）
-VARIANTS = ("", "_m", "_r", "_l", "_m_r", "_m_l")
+# 居中画会压进相邻的墙），再各加一个字母正过来的（_u：符号转到字会倒着读时，字母绕自己的中心转半圈，按制图惯例只从图纸
+# 下方或右侧读）。镜像时字母只挪位置、不镜像。Bonsai 的 SYMBOL 只认转角、不认镜像，所以这些都做成另一个定义
+# （drawset._paper_symbols 按 annotate.paper_pose 选）。字母是 items 里带 "letter": true 的笔画
+POSES = ("", "_m", "_r", "_l", "_m_r", "_m_l")
+VARIANTS = POSES + tuple(s + "_u" for s in POSES)
 
 
 def base_key(key: str) -> str:
@@ -59,26 +64,49 @@ def base_key(key: str) -> str:
     return key
 
 
+def has_letters(spec: dict) -> bool:
+    return any(it.get("letter") for it in spec["items"])
+
+
 def variant_polylines(spec: dict, suffix: str = "") -> list[list[tuple[float, float]]]:
-    """符号变体的折线（实际毫米，局部坐标）：_m 左右镜像（x → -x）；_r、_l 整个平移到插入点的 +x、-x 一侧（最左、最右的笔画
-    正好过插入点）。"""
-    pls = [pts for it in spec["items"] for pts in item_polylines(it)]
+    """符号变体的折线（实际毫米，局部坐标）：_u 字母绕字母外框中心转半圈；_m 左右镜像（x → -x），字母只挪到镜像的位置、
+    字形不镜像；_r、_l 整个平移到插入点的 +x、-x 一侧（最左、最右的笔画正好过插入点）。"""
+    pls = [pts for it in spec["items"] if not it.get("letter") for pts in item_polylines(it)]
+    let = [pts for it in spec["items"] if it.get("letter") for pts in item_polylines(it)]
+    if let:
+        xs, ys = [x for pl in let for x, _ in pl], [y for pl in let for _, y in pl]
+        cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+        if suffix.endswith("_u"):
+            let = [[(2 * cx - x, 2 * cy - y) for x, y in pl] for pl in let]
+        if suffix.startswith("_m"):
+            let = [[(x - 2 * cx, y) for x, y in pl] for pl in let]
     if suffix.startswith("_m"):
         pls = [[(-x, y) for x, y in pl] for pl in pls]
-    if suffix.endswith(("_r", "_l")):
+    pls = pls + let
+    pose = suffix[:-2] if suffix.endswith("_u") else suffix
+    if pose.endswith(("_r", "_l")):
         xs = [x for pl in pls for x, _ in pl]
-        dx = -min(xs) if suffix.endswith("_r") else -max(xs)
+        dx = -min(xs) if pose.endswith("_r") else -max(xs)
         pls = [[(x + dx, y) for x, y in pl] for pl in pls]
     return pls
 
 
-def variants(spec: dict) -> list[str]:
-    """这个符号有哪些变体（后缀）：左右对称的符号（镜像后每段线都还在）不要镜像的那几个。"""
+def variants(spec: dict, letters: bool = False) -> list[str]:
+    """这个符号有哪些摆法变体（后缀，POSES）：左右对称的符号（镜像后每段线都还在）不要镜像的那几个。letters=True 时连同
+    字母正过来的（_u，只有带字母的符号有）一起返回（出符号定义用）。"""
     def segs(pls):
         r = lambda p: (round(p[0], 1) + 0.0, round(p[1], 1) + 0.0)
         return sorted(tuple(sorted((r(a), r(b)))) for pl in pls for a, b in zip(pl, pl[1:]))
     sym = segs(variant_polylines(spec)) == segs(variant_polylines(spec, "_m"))
-    return [s for s in VARIANTS if not (sym and s.startswith("_m"))]
+    allowed = VARIANTS if letters and has_letters(spec) else POSES
+    return [s for s in allowed if not (sym and s.startswith("_m"))]
+
+
+def upright(spec: dict, angle_deg: float) -> bool:
+    """符号在图纸上转了 angle_deg（逆时针，度）时字母要不要正过来（换 _u 变体）：字只能从图纸下方或右侧读，字的底边方向
+    （符号局部 +x）转到 90°～270° 之间（不含 90°，含 270°）就倒着了。"""
+    a = angle_deg % 360.0
+    return has_letters(spec) and 90.5 < a < 270.5
 
 
 def svg_defs(pack: dict) -> list[str]:
@@ -91,8 +119,8 @@ def svg_defs(pack: dict) -> list[str]:
         if not d:
             continue
         cls = spec["ifc_type"][:-4]
-        for suf in variants(spec):
-            segs = [(a, b) for pts in variant_polylines(spec, suf) for a, b in zip(pts, pts[1:])]
+        for suf in variants(spec, letters=True):
+            segs =[(a, b) for pts in variant_polylines(spec, suf) for a, b in zip(pts, pts[1:])]
             path = " ".join(f"M {a[0] / d:.4f},{-a[1] / d:.4f} L {b[0] / d:.4f},{-b[1] / d:.4f}" for a, b in segs)
             out.append(f'<g id="{key}{suf}" class="{cls}"><path class="{cls}" d="{path}"/></g>')
     return out
@@ -167,6 +195,8 @@ def create_types(f, pack: dict) -> dict[str, ifcopenshell.entity_instance]:
         for view in spec.get("views", ["PLAN_VIEW"]):
             ctx = get_or_add_context(f, "Plan", "Body", view)
             api.geometry.assign_representation(f, product=t, representation=_symbol_rep(f, ctx, spec))
+        for name, props in spec.get("psets", {}).items():   # 类型上另写的属性（双控开关的 SwitchFunction 等）
+            api.pset.edit_pset(f, pset=api.pset.add_pset(f, product=t, name=name), properties=props)
         types[key] = t
     return types
 

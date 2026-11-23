@@ -43,6 +43,11 @@ path.flush { stroke-width: 0.1; }
 .IfcOutlet path, .IfcSwitchingDevice path, .IfcLightFixture path, .IfcSanitaryTerminal path, .IfcWasteTerminal path
   { fill: none; stroke: black; stroke-width: 0.3; }
 
+/* 强弱电箱、等电位端子箱、给水点 */
+.IfcElectricDistributionBoard, .IfcJunctionBox, .IfcValve,
+.IfcElectricDistributionBoard path, .IfcJunctionBox path, .IfcValve path
+  { fill: none; stroke: black; stroke-width: 0.3; }
+
 /* 标注线：0.25b */
 .annotation, .IfcAnnotation { stroke-width: 0.15; }
 .PredefinedType-DIMENSION { stroke-width: 0.13; }

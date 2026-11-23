@@ -120,6 +120,7 @@ _OUTSIDE: dict[int, list] = {}  # 视图 id → 放在外墙外侧的编号外�
 _LEVEL: dict[int, list] = {}    # 视图 id → 楼面标高的外框（米），房间名不排在它正上方、正下方
 _GROUPS: dict[int, list] = {}   # 视图 id → [(房间轮廓, 房名组的外框)]（米）：引出的房名不贴着别的房名组写
 _RESERVE: dict[int, list] = {}  # 视图 id → [(房名组的外框, 房间轮廓)]（米）：小房间、交通空间预留的房名位置，只对门窗编号生效（space_labels reserve）
+_WIRES: dict[int, list] = {}   # 视图 id → 开关连线（米，线两侧各 WIRE_CLEAR_MM 的范围）：后放的字不压它（_obstacles）
 
 
 def _den_of(drawing) -> int:
@@ -153,9 +154,10 @@ def view_element_ids(drawing) -> set[int]:
     return {e.id() for e in tool.Drawing.get_drawing_elements(drawing) if not e.is_a("IfcAnnotation")} | set(paper_symbols(drawing))
 
 
-def paper_symbols(drawing) -> dict[int, tuple[float, int]]:
+def paper_symbols(drawing) -> dict[int, tuple[float, int, int]]:
     """本视图按纸面大小用 SYMBOL 标注画的点位（drawset.add_view 建的，IfcRelAssignsToProduct 关联到点位）：
-    {点位 id: (符号相对 symbols.json 实际尺寸的放大倍数 den / paper_scale, 比例分母 den)}（1:150 时放大 3 倍）。"""
+    {点位 id: (符号相对 symbols.json 实际尺寸的放大倍数 den / paper_scale, 比例分母 den, 视图 id)}（1:150 时放大 3 倍；视图 id 给
+    paper_pose 取这张图上排开后的摆法）。"""
     den = _den_of(drawing)
     paper = symbols.paper_scales(conventions.pack_file("symbols.json"))
     out = {}
@@ -163,7 +165,7 @@ def paper_symbols(drawing) -> dict[int, tuple[float, int]]:
         d = a.ObjectType == "SYMBOL" and paper.get(symbols.base_key(uel.get_pset(a, "EPset_Annotation", "Symbol") or ""))
         for r in (a.HasAssignments or ()) if d else ():
             if r.is_a("IfcRelAssignsToProduct"):
-                out[r.RelatingProduct.id()] = (den / d, den)
+                out[r.RelatingProduct.id()] = (den / d, den, drawing.id())
     return out
 
 
@@ -1163,9 +1165,9 @@ def _label(drawing, den, region, center, variants, obs, z=0.0, skip_tiny=False, 
       TIER_ZERO   什么都不压，贴着门窗、家具设备的轮廓放（空隙 0，压的面积不到 ZERO_COVER_MM2 算不压；离墙仍留 WALL_GAP_MM，
                   离别的字 ZERO_GAP_MM；room label tight）；
       TIER_COVER  只避开墙、门窗、门扇和字，取压家具设备最少的位置（room label over furniture）；
-      TIER_TOUCH  同上，贴着墙放（不留空隙，room label touching）；
+      TIER_TOUCH  同上，贴着墙放（不留空隙，room label touching；水电图不用这一档）；
       TIER_SPILL  房间实在太小：只避开别的字和纸面符号，可以出房间 SPILL_MM（不出 clip：分区、分段图不越过切口），取压墙、门扇
-                  和家具最少的位置（room label spills）；
+                  和家具最少的位置（水电图上门洞、门扇差不多按压墙算；room label spills）；
     连这也不行才写在 center（room label crowded）。只试 start ≤ 档位 < stop 的几档（stop=None 试到底）；
     这几档都放不下时返回 None（调用方先试别的写法，如从房外引出 _label_leader，再从 stop 接着试）。
     skip_tiny（总图）：房间连一个字都放不下时不写（记日志 room label skipped），返回 False；写上了返回 True。
@@ -1205,7 +1207,7 @@ def _label(drawing, den, region, center, variants, obs, z=0.0, skip_tiny=False, 
         for tier in range(start, min(last, len(tiers))):
             g, obs_list, soft_as = tiers[tier]
             if (tier == TIER_NEAR and not line_gap) or (tier == TIER_LIGHT and len(small_s) == len(near_s)) \
-                    or (tier == TIER_COVER and not near_s):
+                    or (tier == TIER_COVER and not near_s) or (tier == TIER_TOUCH and PAPER_SHIFT):   # 水电图不贴墙写（字墨会压到墙）
                 continue   # 和上一档一样
             cover = [(shapely.union_all(all_s), 1.0)] if soft_as and near_s else None
             for ob in obs_list:
@@ -1236,13 +1238,15 @@ def _label(drawing, den, region, center, variants, obs, z=0.0, skip_tiny=False, 
                 log("room label skipped (room too small)", what, drawing.Name)
                 return False
         if pick is None:   # 出房间一点、只避开字和纸面符号，压墙（权重 10）、门扇和家具设备（权重 1）最少
-            wide = region.buffer(P(SPILL_MM), join_style="mitre")
+            wide = region.buffer(P(SPILL_MM * (2 if PAPER_SHIFT else 1)), join_style="mitre")   # 水电图房里挤满符号：可以出得远一点
             wide = wide if clip is None else wide.intersection(clip)
             drawn = [hard[i] for i in hard_tree.query(wide)]
             drawn += [soft[i][0] for i in soft_tree.query(wide)] if soft_tree is not None else []
             syms = [hard[i] for i in hard_tree.query(wide) if i >= len(hard) - nsym]
             free = _free_region(wide, [o for o in _OCC.get(drawing.id(), []) if o.intersects(wide)] + syms, P(0.3))
             cover = [(walls.intersection(wide), 10.0), (shapely.union_all(drawn) if drawn else shapely.Polygon(), 1.0)]
+            if PAPER_SHIFT:   # 水电图：房里挤满了纸面符号，常常要出房间；门洞和门扇也按压墙算（不然字会写在门上）
+                cover.append((_door_zones(tool.Ifc.get()).intersection(wide), 9.0))
             hits = [(h[3], h[2] + pen, h[0], h[1], st) for st, pen in stacks
                     for h in [_least_cover(free, _rects(st), cx, cy, step, cover, P(1.0) ** 2)] if h]
             if hits:
@@ -1494,15 +1498,19 @@ def room_labels(f, drawing, den, with_area=True, size=3.5):
 
 H_GAPS_MM = (1.0, 2.0, 3.0, 4.0)   # H 值的字框离自己的符号（图纸毫米），由近到远
 H_LEADER_MM = (4.0, 16.0)          # 紧贴不下时，引出的 H 值离符号中心的范围（图纸毫米）
+MERGE_MM = 12.0                    # point_heights(merge=True)：同一面墙上同类同高的点位沿墙相距不到这么远（图纸毫米）只标一个
+H_LEADER_FAR_MM = 30.0             # point_heights(merge=True)：引出也放不下时，再放宽到这么远（引线连着，不再要求离自己的符号比离别的近）
 
 
-def point_heights(f, drawing, den, defaults=None, bbox_m=None, z=0.0, classes=symbols.HEIGHT_CLASSES):
+def point_heights(f, drawing, den, defaults=None, bbox_m=None, z=0.0, classes=symbols.HEIGHT_CLASSES, merge=False):
     """点位的安装高度（底边距本层楼面，毫米）写成 H300。defaults（符号键 → 默认高度，symbols.default_heights，和图例读
     同一份）给了时只标和类型默认高度相差 ≥1mm 的点位，默认高度写在图例里。只标本视图画出的点位（bbox_m：米，
     分区图的裁切框）。位置按图纸毫米找（_height_spots）：紧贴自己的符号，字框离符号 1～4mm，沿墙方向（符号两侧）优先，
     其次室内一侧、斜角；不压墙、门窗和开启范围、家具洁具和点位符号、已写的字，离自己的符号比离别的点位符号近 1mm 以上。
     都放不下时字写在附近同一房间的空地上，用一条短引出线（Bonsai 的 TEXT_LEADER）指向符号（记日志 height leader）。
-    返回标了几个。"""
+    merge：同一面墙上挨着的同类点位（同一 IFC 类、高度相同、沿墙相距不到 MERGE_MM 图纸毫米，一个挨一个连成串）只标第一个；
+    引出也放不下时，再放宽到 H_LEADER_FAR_MM，最后一档字可以压淡显的家具、洁具（仍不压墙、门窗、点位符号和字）
+    （水电图用；默认 False，现有各图不变）。返回标了几个。"""
     import ifcopenshell.util.placement as up
     P = lambda mm: mm * den / 1000.0
     s = ifcopenshell.util.unit.calculate_unit_scale(f)   # 项目单位 → 米
@@ -1510,6 +1518,14 @@ def point_heights(f, drawing, den, defaults=None, bbox_m=None, z=0.0, classes=sy
     ids = view_element_ids(drawing)
     big = paper_symbols(drawing)
     tree = _drawn_shapes(f, drawing)
+    if merge:   # 水电图：给水点、强弱电箱、端子箱不在 PlanGeometry.SOFT 里，按纸面大小画的符号都要避开
+        tree = shapely.STRtree(list(tree.geometries) + paper_shapes(f, drawing))
+    _hard = []
+
+    def hard_tree():   # 只有墙、门窗和开启范围、接线、点位符号（不含家具洁具）：水电图上 H 值最后一档用
+        if not _hard:
+            _hard.append(shapely.STRtree(_obstacles(f, drawing)[0] + paper_shapes(f, drawing)))
+        return _hard[0]
     occ = _OCC.setdefault(drawing.id(), [])
     allowed = _box(*bbox_m).buffer(-P(CUT_GAP_MM), join_style="mitre") if bbox_m else None   # 不贴着切口折断线
     def outline(e):   # 符号外框；没有几何、也没有二维符号的点位按放置点算 1mm 见方
@@ -1520,7 +1536,7 @@ def point_heights(f, drawing, den, defaults=None, bbox_m=None, z=0.0, classes=sy
         return o
     pts = {e.id(): outline(e) for cls in classes for e in f.by_type(cls) if e.id() in ids}
     fs = FONT_MM[NUM]
-    n = 0
+    n, skip = 0, (_merged_heights(f, pts, classes, defaults, s, P) if merge else set())
     for cls in classes:
         for e in f.by_type(cls):
             if e.id() not in pts:
@@ -1535,35 +1551,107 @@ def point_heights(f, drawing, den, defaults=None, bbox_m=None, z=0.0, classes=sy
                 continue
             if bbox_m and not (bbox_m[0] <= x <= bbox_m[2] and bbox_m[1] <= y <= bbox_m[3]):
                 continue
+            if e.id() in skip:
+                continue
             lit = f"H{int(round(h))}"
             sym = pts[e.id()]
             others = [o for k, o in pts.items() if k != e.id()]
             cell = _cell_of(f, sym)
             tw, th = P(text_mm(lit, fs)), P(fs * 0.9)
 
-            def ok(p, sym=sym, others=others, cell=cell, tw=tw, th=th):
-                """字框不出视图、和符号在同一块不隔墙的地方，不压图形和字，离自己的符号比离别的点位近 1mm 以上。"""
+            def ok(p, sym=sym, others=others, cell=cell, tw=tw, th=th, tr=tree):
+                """字框不出视图、和符号在同一块不隔墙的地方，不压图形（tr）和字，离自己的符号比离别的点位近 1mm 以上。"""
                 b = _box(p[0] - tw / 2 - P(0.3), p[1] - th / 2 - P(0.3), p[0] + tw / 2 + P(0.3), p[1] + th / 2 + P(0.3))
                 if (allowed is not None and not allowed.contains(b)) or (cell is not None and not cell.contains(b)) \
-                        or len(tree.query(b, predicate="intersects")) or any(o.intersects(b) for o in occ):
+                        or len(tr.query(b, predicate="intersects")) or any(o.intersects(b) for o in occ):
                     return False
                 d_own = sym.distance(b)
                 return all(o.distance(b) > d_own + P(1.0) for o in others)
             u, nv = np.array([m[0][0], m[1][0]]), np.array([m[0][1], m[1][1]])   # 局部 x 沿墙，+y 指向室内
+            sym_other = lambda sym=sym: [g for g in paper_shapes(f, drawing) if g is not sym]   # 水电图：引线不穿过别的点位符号（含地漏、排水点）
             spot = next((p for _, p in _height_spots(sym, u, nv, tw, th, den) if ok(p)), None)
             if spot is not None:
                 text(drawing, spot[0], spot[1], lit, size=NUM, z=z)
-            elif cell is None or not _height_leader(f, drawing, den, sym, lit, tw, z, ok):
+            elif cell is None or not (_height_leader(f, drawing, den, sym, lit, tw, z, ok, avoid=sym_other() if merge else ()) or merge and (
+                    _height_leader(f, drawing, den, sym, lit, tw, z, lambda p: ok(p, others=()), rmax=H_LEADER_FAR_MM, avoid=sym_other())
+                    # 水电图：还放不下时字可以压淡显的家具、洁具（单独计数），仍不压墙、门窗、点位符号和字，引线连着
+                    or _height_leader(f, drawing, den, sym, lit, tw, z, lambda p: ok(p, others=(), tr=hard_tree()), rmax=H_LEADER_FAR_MM,
+                                      avoid=sym_other()))):
                 log("height crowded", lit, e.Name)
                 c = np.array(sym.centroid.coords[0]) + nv * P(4.0)
-                text(drawing, *_free_spot(drawing, den, lit, NUM, [tuple(c)], tree), lit, size=NUM, z=z)
+                ring = [tuple(c + P(r) * np.array([math.cos(a), math.sin(a)])) for r in range(2, 21 if merge else 13)
+                        for a in np.arange(0, 2 * math.pi, math.pi / 8)] if merge else []   # 水电图：至少不压别的字，不出这个点位所在的房间
+                ring_all = [p for p in ring if cell is None or cell.contains(shapely.Point(p))]
+                ring = [p for p in ring if (cell is None or cell.contains(shapely.Point(p)))
+                        and (allowed is None or not merge or allowed.contains(_text_box(lit, NUM, den, *p)))]   # 不贴着切口
+                if merge:   # 先找不压墙、门窗、符号和字的（可以压家具），再找不压墙、门窗和字的；离符号远的加一条引线（不穿墙、别的符号）
+                    def leader_of(p):
+                        q = shapely.ops.nearest_points(sym, shapely.Point(*p))[0]
+                        if q.distance(shapely.Point(*p)) <= tw / 2 + P(1.5):
+                            return []
+                        left = q.x < p[0]
+                        return [(float(p[0] - tw / 2), float(p[1])) if left else (float(p[0] + tw / 2), float(p[1])), (q.x, q.y)]
+
+                    def clear(p, tr):
+                        if _free_spot(drawing, den, lit, NUM, [p], tr, strict=True) is None:
+                            return False
+                        ln = leader_of(p)
+                        return not ln or not (geo.crosses_wall(LineString(ln), WALL_TOUCH_M)
+                                              or any(o is not sym and o.intersects(LineString(ln)) for o in paper_shapes(f, drawing)))
+                    p = next((p for tr in (hard_tree(), _obstacles(f, drawing)[1]) for p in ring if clear(p, tr)), None) \
+                        or _free_spot(drawing, den, lit, NUM, ring, hard_tree(), strict=True) \
+                        or _free_spot(drawing, den, lit, NUM, ring, _obstacles(f, drawing)[1], strict=True) \
+                        or min(ring or ring_all or [tuple(c)], key=lambda q: (len(hard_tree().query(_text_box(lit, NUM, den, *q), predicate="intersects")),
+                                                                  math.dist(q, tuple(c))))   # 都不行：压的东西最少的
+                    ln = leader_of(p)
+                    if ln:
+                        _leader(drawing, ln, lit, NUM, ln[0][0] < p[0], z)
+                        occ.append(_text_box(lit, NUM, den, *p))
+                    else:
+                        text(drawing, *p, lit, size=NUM, z=z)
+                else:
+                    text(drawing, *_free_spot(drawing, den, lit, NUM, [tuple(c)] + ring, tree), lit, size=NUM, z=z)
             n += 1
     return n
 
 
+def _merged_heights(f, pts, classes, defaults, s, P) -> set:
+    """point_heights(merge=True)：同一面墙上挨着的同类点位（同一 IFC 类、高度相同、沿墙相距不到 MERGE_MM，一个挨一个连成串）
+    算一组，组里要标高度的只标第一个（按构件 id）。返回不用标的点位 id。"""
+    import ifcopenshell.util.placement as up
+    info = []
+    for cls in classes:
+        for e in f.by_type(cls):
+            if e.id() not in pts:
+                continue
+            m = up.get_local_placement(e.ObjectPlacement)
+            st = uel.get_container(e)
+            h = (m[2][3] - (up.get_local_placement(st.ObjectPlacement)[2][3] if st and st.ObjectPlacement else 0.0)) * s * 1000
+            t = uel.get_type(e)
+            d = (defaults or {}).get(t.Tag if t else None)
+            info.append((e.id(), cls, h, np.array([m[0][3] * s, m[1][3] * s]), np.array([m[0][0], m[1][0]]), d is None or abs(h - d) >= 1.0))
+    parent = {i[0]: i[0] for i in info}
+
+    def root(k):
+        while parent[k] != k:
+            parent[k] = parent[parent[k]]
+            k = parent[k]
+        return k
+    for a, b in itertools.combinations(info, 2):
+        d = b[3] - a[3]
+        if a[1] == b[1] and abs(a[2] - b[2]) < 1.0 and abs(float(a[4] @ b[4])) > 0.99 \
+                and abs(float(d @ np.array([-a[4][1], a[4][0]]))) < P(0.5) and abs(float(d @ a[4])) < P(MERGE_MM):
+            parent[root(a[0])] = root(b[0])
+    first = {}
+    for k, *_, need in sorted(info, key=lambda i: i[0]):
+        if need:
+            first.setdefault(root(k), k)
+    return {k for k, *_, need in info if need and first[root(k)] != k}
+
+
 def _soft_outline(geo, e, paper=None):
     """家具、洁具、点位在平面图上实际占的地方（米）：三维 Body 的投影并上类型的二维符号（_symbol_outline）；按纸面大小用
-    SYMBOL 画的点位（paper = (放大倍数, 比例分母)，见 paper_symbols）是图上符号的笔画（_paper_outline）。没有返回 None。"""
+    SYMBOL 画的点位（paper = (放大倍数, 比例分母, 视图 id)，见 paper_symbols）是图上符号的笔画（_paper_outline）。没有返回 None。"""
     if paper:
         return _paper_outline(e, *paper)
     p = geo.fp(e)
@@ -1592,14 +1680,14 @@ def _height_spots(sym, u, n, tw, th, den):
     return sorted(out, key=lambda t: t[0])
 
 
-def _height_leader(f, drawing, den, sym, lit, tw, z, ok):
+def _height_leader(f, drawing, den, sym, lit, tw, z, ok, rmax=H_LEADER_MM[1], avoid=()):
     """H 值紧贴不下：字放在符号周围 H_LEADER_MM 内的空地上（ok 同 point_heights：和符号在同一块不隔墙的地方），
     引线不穿墙、不穿过已写的字，由近到远取第一个；用 TEXT_LEADER 从字的一端引到符号外框。返回是否放上了。"""
     P = lambda mm: mm * den / 1000.0
     geo = plan_geometry(f)
     c = np.array(sym.centroid.coords[0])
     occ = _OCC.setdefault(drawing.id(), [])
-    for r in np.arange(H_LEADER_MM[0], H_LEADER_MM[1], 0.5):
+    for r in np.arange(H_LEADER_MM[0], rmax, 0.5):
         for a in np.arange(0.0, 2 * math.pi, math.pi / 12):
             p = c + np.array([math.cos(a), math.sin(a)]) * P(r)
             if not ok(p):
@@ -1614,7 +1702,7 @@ def _height_leader(f, drawing, den, sym, lit, tw, z, ok):
             line = LineString(path)
             if geo.crosses_wall(line, WALL_TOUCH_M):
                 continue
-            if any(o.intersects(line.buffer(P(0.3))) for o in occ):
+            if any(o.intersects(line.buffer(P(0.3))) for o in occ) or any(o.intersects(line) for o in avoid):   # avoid：别的点位符号
                 continue
             _leader(drawing, path, lit, NUM, left, z)
             occ.append(_text_box(lit, NUM, den, *p))
@@ -1629,14 +1717,84 @@ def _drawn_shapes(f, drawing):
     return shapely.STRtree(hard + [p for p, _ in soft_shapes(f, drawing)])
 
 
-def _free_spot(drawing, den, lit, size, spots, tree):
-    """spots（米）里第一个放得下 lit 的位置：不压 tree 里的图形、不压本视图已写的字；都不行取第一个。"""
+def _free_spot(drawing, den, lit, size, spots, tree, strict=False):
+    """spots（米）里第一个放得下 lit 的位置：不压 tree 里的图形、不压本视图已写的字；都不行取第一个（strict 时返回 None）。"""
     occ = _OCC.get(drawing.id(), [])
     for p in spots:
         b = _text_box(lit, size, den, *p)
         if not len(tree.query(b, predicate="intersects")) and not any(o.intersects(b) for o in occ):
             return p
-    return spots[0]
+    return None if strict or not spots else spots[0]
+
+
+WIRE_CLASS = "jz-wire"   # 开关连线的样式类（约定包 cn-mep.css）
+WIRE_BULGE = (0.18, -0.18, 0.3, -0.3, 0.45, -0.45, 0.6, -0.6)   # 弧线拱高 / 弦长，由先到后试
+WIRE_CLEAR_MM = 0.4      # 弧线离字、离别的符号至少这么远；后放的字也离弧线这么远（图纸毫米）
+
+
+def _arc(a, b, bulge, n=32):
+    """a 到 b 的圆弧，拱高 = bulge × 弦长（正负是拱向弦的左、右侧），n 段折线（米）。"""
+    a, b = np.array(a, dtype=float), np.array(b, dtype=float)
+    c = float(np.linalg.norm(b - a))
+    if c < 1e-9 or not bulge:
+        return [tuple(a), tuple(b)]
+    s = bulge * c
+    r = (c * c / 4 + s * s) / (2 * abs(s))
+    mid, nrm = (a + b) / 2, np.array([-(b - a)[1], (b - a)[0]]) / c
+    o, top = mid + nrm * (s - math.copysign(r, s)), mid + nrm * s
+    ang = lambda p: math.atan2(p[1] - o[1], p[0] - o[0])
+    a0, sweep = ang(a), (ang(b) - ang(a)) % (2 * math.pi)
+    if (ang(top) - a0) % (2 * math.pi) > sweep:   # 拱顶不在逆时针那一段上：顺时针走
+        sweep -= 2 * math.pi
+    return [tuple(o + r * np.array([math.cos(a0 + sweep * i / n), math.sin(a0 + sweep * i / n)])) for i in range(n + 1)]
+
+
+def wires(f, drawing, den, z=0.0):
+    """开关连线：每个开关到它控制的每盏灯（IFC 端口连接，ifcopenshell.util.system.get_connected_to）画一条圆弧（Bonsai 的
+    LINEWORK，样式类 WIRE_CLASS，关联到开关，Name 写"开关 Tag→灯 Tag"）。两头都是本视图按纸面大小画的符号才画；弧线从符号
+    笔画外截断（端点停在符号外框上，不穿过两头的符号）。拱高按 WIRE_BULGE 依次试，取压字、压别的符号、和已画的弧线相交最少的
+    （一样少取先试的）；画好的弧线登记进 _WIRES，后放的字（房间名、楼面标高）不压它。返回 [(开关 Tag, 灯 Tag, 压字, 压符号)]。"""
+    import ifcopenshell.util.system as usys
+    import ifcopenshell.api.drawing  # noqa: F401（assign_product）
+    P = lambda mm: mm * den / 1000.0
+    big = paper_symbols(drawing)
+    outl = {i: o for i, v in big.items() for o in [_paper_outline(f.by_id(i), *v)] if o is not None}
+    # 弧线从符号笔画外框的形心连（不用插入点：画到插入点一侧的变体、沿墙挪开画的符号，插入点不在笔画里），再截在外框上
+    xy = lambda e: (lambda c: (c.x, c.y))(outl[e.id()].centroid)
+    occ = _OCC.setdefault(drawing.id(), [])
+    drawn = _WIRES.setdefault(drawing.id(), [])
+    lines, out = [], []
+    for sw in sorted((e for e in f.by_type("IfcSwitchingDevice") if e.id() in outl), key=lambda e: (e.Tag or "", e.id())):
+        for lt in sorted((e for e in usys.get_connected_to(sw) if e.id() in outl), key=lambda e: (e.Tag or "", e.id())):
+            ends = outl[sw.id()].union(outl[lt.id()]).buffer(P(0.1))
+            others = [o for i, o in outl.items() if i not in (sw.id(), lt.id())]
+            best = None
+            for i, b in enumerate(WIRE_BULGE):
+                seg = LineString(_arc(xy(sw), xy(lt), b)).difference(ends)
+                parts = [g for g in getattr(seg, "geoms", [seg]) if g.length > 0]
+                if not parts:
+                    continue
+                o1, o2 = outl[sw.id()].buffer(P(0.2)), outl[lt.id()].buffer(P(0.2))
+                g = max(parts, key=lambda g: (g.intersects(o1) and g.intersects(o2), g.length))   # 两头分别搭在两个符号上的那一段
+                band = g.buffer(P(WIRE_CLEAR_MM))
+                sc = (not (g.intersects(o1) and g.intersects(o2)), sum(o.intersects(band) for o in occ), sum(o.intersects(band) for o in others),
+                      sum(ln.crosses(g) for ln in lines), i)   # 先要两头都搭在符号上
+                if best is None or sc < best[0]:
+                    best = (sc, g)
+            if best is None:
+                log("wire skipped", sw.Tag, lt.Tag)
+                continue
+            (_, n_txt, n_sym, _, _), g = best
+            obj = polyline(drawing, list(g.coords), z, classes=WIRE_CLASS)
+            a = tool.Ifc.get_entity(obj)
+            a.Name = f"{sw.Tag}→{lt.Tag}"
+            api.drawing.assign_product(f, relating_product=sw, related_object=a)
+            lines.append(g)
+            drawn.append(g.buffer(P(WIRE_CLEAR_MM)))
+            out.append((sw.Tag, lt.Tag, n_txt, n_sym))
+            if n_txt or n_sym:
+                log("wire crowded", sw.Tag, lt.Tag, "text", n_txt, "symbols", n_sym)
+    return out
 
 
 def wall_materials(f, drawing, bbox_m=None) -> set[str]:
@@ -2407,10 +2565,10 @@ def _opening_zone(fr):
 
 
 def _obstacles(f, drawing):
-    """放字要避开的硬障碍：墙 + 每樘门窗的洞口和平开门开启范围。返回 (列表, STRtree, 门窗 frame 列表)。"""
+    """放字要避开的硬障碍：墙 + 每樘门窗的洞口和平开门开启范围（+ 开关连线图上已画的接线）。返回 (列表, STRtree, 门窗 frame 列表)。"""
     geo = plan_geometry(f)
     frames = [fr for fr in (geo.frame(el) for el in geo.openings) if fr is not None]
-    hard = list(geo.wall_polys) + [zz for fr in frames for zz in _opening_zone(fr)]
+    hard = list(geo.wall_polys) + [zz for fr in frames for zz in _opening_zone(fr)] + _WIRES.get(drawing.id(), [])
     return hard, shapely.STRtree(hard), frames
 
 
@@ -2439,7 +2597,7 @@ def soft_shapes(f, drawing, paper=True):
 def paper_shapes(f, drawing):
     """本视图按纸面大小用 SYMBOL 画的点位符号的笔画（米，_paper_outline）。房间名、门窗编号不压它们（和墙同一级的硬障碍：
     1:100、1:150 上符号比实物大得多，压上去字和符号都读不清）。"""
-    return [p for e_id, (k, den) in paper_symbols(drawing).items() for p in [_paper_outline(f.by_id(e_id), k, den)] if p is not None]
+    return [p for e_id, v in paper_symbols(drawing).items() for p in [_paper_outline(f.by_id(e_id), *v)] if p is not None]
 
 
 def _symbol_outline(e, scale):
@@ -2476,9 +2634,18 @@ def _symbol_pack() -> dict:
     return _SYMBOL_PACK[0]
 
 
+PAPER_SHIFT = False   # 水电图（make_plan_set --mep）打开：同一面墙上的符号沿墙排开（layout_paper），挪开的加引线
+SHIFT_CLASS = "jz-shift"   # 挪开画的符号指回实际位置的引线（约定包 cn-mep.css）
+LAYOUT_INK_MM = 0.15     # 排开时符号笔画两侧各算这么宽、圈起来的连里面（图纸毫米；和回归里"符号压符号"的量法同一个）
+LAYOUT_GAP_MM = 0.3      # 排开后相邻两个符号之间至少空这么多（图纸毫米）
+LAYOUT_MAX_MM = 8.0      # 一个符号最多挪这么远（图纸毫米；1:100 是 0.8m，约两个符号宽：再远读不出是哪一个点位，引线也太长）
+_VIEW_POSE: dict[tuple, tuple] = {}   # (视图 id, 点位 id) → 排开后的摆法（带第三项沿墙挪开的距离）
+
+
 def _paper_lines(f, e, k, pose):
-    """点位 e 的纸面符号按 pose（符号键后缀, 再转的角度）画出来的折线（米，世界坐标）：符号变体（symbols.variant_polylines）
-    转 pose 的角度、放大 k 倍，再按点位的放置变换。点位类型不在符号库里返回 []。"""
+    """点位 e 的纸面符号按 pose（符号键后缀, 再转的角度[, 沿墙挪开的距离]）画出来的折线（米，世界坐标）：符号变体
+    （symbols.variant_polylines）转 pose 的角度、放大 k 倍，沿点位局部 x（沿墙）挪开（项目长度单位），再按点位的放置变换。
+    点位类型不在符号库里返回 []。"""
     import ifcopenshell.util.placement as up
     spec = _symbol_pack().get(getattr(uel.get_type(e), "Tag", None))
     if spec is None:
@@ -2487,22 +2654,27 @@ def _paper_lines(f, e, k, pose):
     m = up.get_local_placement(e.ObjectPlacement)
     a = math.radians(pose[1])
     ca, sa = math.cos(a), math.sin(a)
+    dx = pose[2] if len(pose) > 2 else 0.0
 
     def tf(x, y):
-        x, y = (ca * x - sa * y) * k, (sa * x + ca * y) * k
+        x, y = (ca * x - sa * y) * k + dx, (sa * x + ca * y) * k
         return (m[0][0] * x + m[0][1] * y + m[0][3]) * s, (m[1][0] * x + m[1][1] * y + m[1][3]) * s
     return [[tf(*p) for p in pts] for pts in symbols.variant_polylines(spec, pose[0]) if len(pts) > 1]
 
 
-def paper_pose(f, e, k, den):
-    """按纸面大小画的点位符号怎么摆：(符号键后缀, 在点位放置上再转的角度)。drawset._paper_symbols 按它建 SYMBOL，
-    _paper_outline 按它算笔画。符号代表贴墙的点位，要整个画在点位所在的房间里、不压墙：依次试转角 PAPER_TURNS 和各变体
+def paper_pose(f, e, k, den, view=None):
+    """按纸面大小画的点位符号怎么摆：(符号键后缀, 在点位放置上再转的角度[, 沿墙挪开的距离])。drawset._paper_symbols 按它建
+    SYMBOL，_paper_outline 按它算笔画。符号代表贴墙的点位，要整个画在点位所在的房间里、不压墙：依次试转角 PAPER_TURNS 和各变体
     （symbols.variants：原样、左右镜像、画到插入点一侧），取第一个笔画不压墙、不出房间、不压平开门扫过的扇形的（都不到
     PAPER_CLEAN_MM）；都不行取压墙和出房间的笔画最短的（压墙的那段两样都算），一样短的取压门扇少的。原样就干净的不动。
     转向（转角不为 0）只在不转向的各变体都压墙或出房间时才用：不转向时符号背贴着点位所在的墙，转过去圆圈离墙远，读不出
     点位在哪道墙上；不转向的变体里有不压墙、不出房间的，就在这些里取压门扇少的。
+    带字母的符号（K、TV、TD、LEB、L、R、P）摆好后转到字会倒着读的，后缀再加 _u（字母正过来，symbols.upright）。
+    view（视图 id）：这张图上排开过（layout_paper）的用排开后的摆法（第三项是沿墙挪开的距离，项目长度单位）。
     房间：点位放置往局部 +y（朝室内）0.1m 那一点所在的房间（PlanGeometry.space_at），找不到只看墙。"""
     import ifcopenshell.util.placement as up
+    if view is not None and (view, e.id()) in _VIEW_POSE:
+        return _VIEW_POSE[(view, e.id())]
     key = (id(f), e.id(), k, den)
     if key in _POSE:
         return _POSE[key]
@@ -2517,23 +2689,232 @@ def paper_pose(f, e, k, den):
         room = geo.fp(sp) if sp is not None else None
         swings = _swings(f)
         mm = 1000.0 / den   # 米 → 图纸毫米
-        score = None
-        for i, pose in enumerate((suf, turn) for turn in PAPER_TURNS for suf in symbols.variants(spec)):
-            if pose[1] != PAPER_TURNS[0] and score is not None and score[0] == 0.0:
-                break   # 不转向就有不压墙、不出房间的：不转向
+
+        def measure(pose):   # (压墙, 出房间, 压门扇)，图纸毫米
             ink = shapely.MultiLineString(_paper_lines(f, e, k, pose))
             near = [geo.wall_polys[j] for j in geo.wall_tree.query(ink)]
             in_wall = shapely.union_all([w.intersection(ink) for w in near]).length * mm if near else 0.0
             out = (ink.length - ink.intersection(room).length) * mm if room is not None else 0.0
-            door = ink.intersection(swings).length * mm
+            return in_wall, out, ink.intersection(swings).length * mm
+        score = None
+        for i, pose in enumerate((suf, turn) for turn in PAPER_TURNS for suf in symbols.variants(spec)):
+            if pose[1] != PAPER_TURNS[0] and score is not None and score[0] == 0.0:
+                break   # 不转向就有不压墙、不出房间的：不转向
+            in_wall, out, door = measure(pose)
             if max(in_wall, out, door) < PAPER_CLEAN_MM:
-                best = pose
+                best, score = pose, None
                 break
             sc = (round(in_wall + out, 1), round(door, 1), i)
             if score is None or sc < score:
                 score, best = sc, pose
+    if spec is not None:   # 带字母的符号转到字会倒着读时换字母正过来的变体（_u，字母外框不变，上面算的压线照样成立）
+        m = up.get_local_placement(e.ObjectPlacement)
+        if symbols.upright(spec, math.degrees(math.atan2(m[1][0], m[0][0])) + best[1]):
+            best = (best[0] + "_u",) + tuple(best[1:])
     _POSE[key] = best
     return best
+
+
+def _isotonic(t):
+    """t 的单调不减最小二乘拟合（相邻违序的合并取平均，pool adjacent violators）。"""
+    blocks = []   # [和, 个数]
+    for v in t:
+        blocks.append([v, 1])
+        while len(blocks) > 1 and blocks[-2][0] / blocks[-2][1] > blocks[-1][0] / blocks[-1][1]:
+            s_, n_ = blocks.pop()
+            blocks[-1][0] += s_
+            blocks[-1][1] += n_
+    return [b[0] / b[1] for b in blocks for _ in range(b[1])]
+
+
+def symbol_region(f, e, k, pose, den, ink_mm=LAYOUT_INK_MM):
+    """符号画出来占的地方（米）：笔画两侧各 ink_mm（图纸毫米），圈起来的连里面。回归的"符号压符号"按同一个量法。"""
+    lines = _paper_lines(f, e, k, pose)
+    if not lines:
+        return None
+    u = shapely.unary_union([LineString(p) for p in lines])
+    return shapely.unary_union([u.buffer(ink_mm * den / 1000.0), *shapely.get_parts(shapely.polygonize(shapely.get_parts(u)))])
+
+
+def layout_paper(f, view, items, den):
+    """水电图上同一面墙上的点位符号沿墙排开（只在 PAPER_SHIFT 时由 drawset._paper_symbols 调用）。items = [(点位, 放大倍数)]。
+    贴墙的点位（插入点在所在房间的一条边上、没有转向的）按房间和墙线（方向、位置相同，门洞两边的算一条）分组，沿墙排序；
+    每个符号沿墙占的一段（符号占的地方在墙方向的投影，加 LAYOUT_GAP_MM 间隙）互不重叠、总挪动量（平方和）最小：先按这条墙线
+    前面的障碍——地面上的点位（地漏、排水点，不挪）的符号、灯、平开门的洞口和开启范围、墙和房外——把墙线切成几段空段，每个
+    符号归到放得下它、离它最近的空段（一段放不下时把两头的挪到别的空段），段内按单调最小二乘（_isotonic）求位置、再夹到
+    空段里。挪动量超过 LAYOUT_MAX_MM 的那一段不按这样排；这些符号再一个一个按平面上的实际形状沿墙试（每 0.25mm，不超过
+    LAYOUT_MAX_MM），取最近的一处不压别的符号、障碍、不出房间的；还不行的保持原样（记日志 layout kept）。只沿所在的墙线
+    一维挪，不换墙。点位坐标不动：结果是这张图上的摆法（_VIEW_POSE，第三项是沿墙挪开的距离），drawset 给挪开的画引线。
+    返回 (挪开的个数, 排不开的 [(房间名, [点位 Tag], 原因)])。"""
+    import ifcopenshell.util.placement as up
+    geo = plan_geometry(f)
+    S = geo.S
+    P = lambda mm: mm * den / 1000.0
+    base, info = {}, {}
+    for e, k in items:
+        pose = paper_pose(f, e, k, den)
+        reg = symbol_region(f, e, k, pose, den)
+        if reg is None:
+            continue
+        m = up.get_local_placement(e.ObjectPlacement)
+        p = np.array([m[0][3] * S, m[1][3] * S])
+        u = np.array([m[0][0], m[1][0]]) / (math.hypot(m[0][0], m[1][0]) or 1.0)
+        n = np.array([m[0][1], m[1][1]]) / (math.hypot(m[0][1], m[1][1]) or 1.0)
+        sp = geo.space_at(shapely.Point(*(p + n * 0.1)))
+        room = geo.fp(sp) if sp is not None else None
+        edge = None
+        if room is not None and not pose[1]:
+            ring = list(room.exterior.coords)
+            for i in range(len(ring) - 1):
+                a, b = np.array(ring[i]), np.array(ring[i + 1])
+                d = b - a
+                L = float(np.hypot(*d))
+                if L < 1e-6 or abs(d[0] * u[1] - d[1] * u[0]) / L > 0.01:   # 不和墙平行
+                    continue
+                if LineString([a, b]).distance(shapely.Point(*p)) < 0.002:
+                    edge = (sp.id(), i, a, b)
+                    break
+        base[e.id()] = (e, k, pose, reg)
+        info[e.id()] = (p, u, n, edge)
+    fixed = [base[i][3] for i, v in info.items() if v[3] is None]   # 不挪的：地面点位、灯、转向的
+    doors = [z_ for fr in (geo.frame(el) for el in geo.openings) if fr is not None and fr["el"].is_a("IfcDoor") for z_ in _opening_zone(fr)]
+    walls_in = shapely.union_all(list(geo.wall_polys or [])).buffer(-(P(LAYOUT_INK_MM) + 0.001))   # 墙往里缩外扩的那一圈：笔画贴着墙面不算压，伸进墙 1mm 就算
+    obst = shapely.union_all(fixed + doors + [walls_in])   # 不挪的符号、门洞和门扇、墙
+    groups = {}   # 同一间房、同一条墙线（方向、离原点的距离按 5mm 取整）上的点位一组：门洞两边的也在一组
+    for i, (p, u, n, edge) in info.items():
+        if edge is not None:
+            groups.setdefault((edge[0], round(math.degrees(math.atan2(u[1], u[0]))) % 360, round(float(np.dot(p, n)) * 200)), []).append(i)
+    moved, kept, shift = 0, [], {}
+    paper = lambda m_: m_ * 1000.0 / den   # 米 → 图纸毫米
+    pts_of = lambda g: [c for h in getattr(g, "geoms", [g]) if not h.is_empty
+                        for c in (h.exterior.coords if h.geom_type == "Polygon" else h.coords)]
+    for (sid, _, _), ids in sorted(groups.items()):
+        u, n = info[ids[0]][1], info[ids[0]][2]
+        along = lambda g: [float(np.dot(np.array(c), u)) for c in pts_of(g)]
+        boxes = {i: (min(along(base[i][3])), max(along(base[i][3]))) for i in ids}   # 每个符号沿墙占的一段
+        reach = P(LAYOUT_MAX_MM) + max(b_ - a_ for a_, b_ in boxes.values())
+        span = (min(a_ for a_, _ in boxes.values()) - reach, max(b_ for _, b_ in boxes.values()) + reach)
+        p0 = info[ids[0]][0]
+        at = lambda s_, dn: p0 + u * (s_ - float(np.dot(p0, u))) + n * dn
+        depth = max(float(np.dot(np.array(c) - p0, n)) for i in ids for c in pts_of(base[i][3]))
+        band = shapely.Polygon([at(span[0], 0.0001), at(span[1], 0.0001), at(span[1], depth), at(span[0], depth)])   # 墙前符号占的那一条
+        room = geo.fp(f.by_id(sid))
+        hit = shapely.union_all([obst.intersection(band), band.difference(room.buffer(P(LAYOUT_INK_MM)))])   # 障碍、墙和房外
+        cuts = [(min(xs), max(xs)) for g in getattr(hit, "geoms", [hit]) if not g.is_empty and g.area > 1e-12 for xs in [along(g)]]
+        free = [(a_ + P(0.2), b_ - P(0.2)) for a_, b_ in _subtract_spans(span, cuts) if b_ - a_ > P(0.4)]   # 笔画离墙、障碍再留 0.2mm
+        by_free = {}
+        for i in ids:   # 归到放得下它、离它最近的空段（都放不下就归最近的）
+            c, wi = sum(boxes[i]) / 2, boxes[i][1] - boxes[i][0]
+            dist = lambda j: 0.0 if free[j][0] <= c <= free[j][1] else min(abs(c - free[j][0]), abs(c - free[j][1]))
+            fit = [j for j in range(len(free)) if free[j][1] - free[j][0] >= wi]
+            j = min(fit or range(len(free)), key=dist, default=None)
+            if j is not None:
+                by_free.setdefault(j, []).append(i)
+        wid = lambda i: boxes[i][1] - boxes[i][0] + P(LAYOUT_GAP_MM)
+        for _ in range(len(ids)):   # 一段放不下这几个：把两头的一个挪到别的放得下它的空段（离它最近的），直到都放得下或挪不动
+            over = [j for j, mem in sorted(by_free.items()) if sum(wid(i) for i in mem) - P(LAYOUT_GAP_MM) > free[j][1] - free[j][0]]
+            if not over:
+                break
+            mem = sorted(by_free[over[0]], key=lambda i: sum(boxes[i]))
+            cand = [(min(abs(sum(boxes[i]) / 2 - free[j2][0]), abs(sum(boxes[i]) / 2 - free[j2][1])), i, j2) for i in {mem[0], mem[-1]}
+                    for j2 in range(len(free)) if j2 != over[0] and free[j2][1] - free[j2][0] - sum(wid(x) for x in by_free.get(j2, []))
+                    >= wid(i) - P(LAYOUT_GAP_MM)]
+            if not cand:
+                break
+            _, i, j2 = min(cand)
+            by_free[over[0]].remove(i)
+            by_free.setdefault(j2, []).append(i)
+        for j, mem in sorted((j, m_) for j, m_ in by_free.items() if m_):
+            lo, hi = free[j]
+            mem.sort(key=lambda i: (sum(boxes[i]), i))
+            gap = P(LAYOUT_GAP_MM)
+            w = [boxes[i][1] - boxes[i][0] + gap for i in mem]
+            C = [sum(w[:q]) for q in range(len(mem))]
+            tags = [base[i][0].Tag or str(i) for i in mem]
+            if C[-1] + w[-1] - gap > hi - lo + 1e-9:
+                if len(mem) > 1 or boxes[mem[0]][0] < lo or boxes[mem[0]][1] > hi:
+                    kept.append((sp_name(f, sid), tags, f"这段墙 {paper(hi - lo):.1f}mm，放不下 {paper(C[-1] + w[-1] - gap):.1f}mm", mem, u))
+                continue
+            z = _isotonic([boxes[i][0] - C[q] for q, i in enumerate(mem)])
+            z = [min(max(v, lo), hi - C[-1] - (w[-1] - gap)) for v in z]
+            d = [z[q] + C[q] - boxes[i][0] for q, i in enumerate(mem)]
+            if max(abs(x) for x in d) > P(LAYOUT_MAX_MM):
+                kept.append((sp_name(f, sid), tags, f"要挪 {paper(max(abs(x) for x in d)):.1f}mm，超过 {LAYOUT_MAX_MM:g}mm", mem, u))
+                continue
+            for q, i in enumerate(mem):
+                if abs(d[q]) > P(0.25):   # 挪不到 0.25mm 的不挪（原来的位置已经不压墙、不出房间）
+                    shift[i] = (d[q], u)
+    # 第二遍：上面按沿墙投影排（门扇的扇形、地面点位按它们在这条墙前面的投影整段让开，偏保守）排不开的，一个一个按平面上
+    # 实际的形状试：沿墙往两边每 0.25mm 挪，取最近的一处不压别的符号（已排好的位置）、障碍，不出房间的
+    placed = lambda i: shapely.affinity.translate(base[i][3], *(shift[i][1] * shift[i][0])) if i in shift else base[i][3]
+    still = []
+    for room_name, tags, why, mem, u in kept:
+        room = None
+        for i in mem:
+            sp = geo.space_at(shapely.Point(*(info[i][0] + info[i][2] * 0.1)))
+            room = geo.fp(sp).buffer(P(LAYOUT_INK_MM)) if sp is not None else None
+            others = shapely.union_all([obst] + [placed(j) for j in base if j != i])
+            bad = lambda g: (g.intersection(others).area * paper(1.0) ** 2 > 0.05
+                             or (room is not None and g.difference(room).area * paper(1.0) ** 2 > 0.05))
+            if not bad(base[i][3]):
+                continue
+            steps = sorted((s_ * 0.25 for s_ in range(-int(LAYOUT_MAX_MM * 4), int(LAYOUT_MAX_MM * 4) + 1) if s_), key=lambda v: (abs(v), v))
+            hit = next((P(v) for v in steps if not bad(shapely.affinity.translate(base[i][3], *(u * P(v))))), None)
+            if hit is None:
+                still.append((room_name, [base[i][0].Tag or str(i)], why))
+            else:
+                shift[i] = (hit, u)
+    for i, (dd, u) in shift.items():
+        pose = base[i][2]
+        _VIEW_POSE[(view, i)] = (pose[0], pose[1], dd * float(np.dot(info[i][1], u)) / S)   # 沿点位自己的局部 x（项目长度单位）
+        moved += 1
+    for r in still:
+        log("layout kept", *r)
+    return moved, still
+
+
+def sp_name(f, sid):
+    sp = f.by_id(sid)
+    return sp.LongName or sp.Name or str(sid)
+
+
+def _subtract_spans(span, cuts):
+    segs = [tuple(span)]
+    for c0, c1 in sorted(cuts):
+        segs = [s for a, b in segs for s in ((a, min(b, c0)), (max(a, c1), b)) if s[1] > s[0]]
+    return segs
+
+
+def shift_leader(f, drawing, e, k, pose, z=0.0):
+    """沿墙挪开画的符号（paper_pose 第三项不为 0）：从点位实际位置画一条细线到符号笔画上最近的一点（LINEWORK，样式类
+    SHIFT_CLASS，关联到点位，Name"引线 Tag"），登记进 _WIRES（后放的字不压它）。没挪开返回 None。"""
+    import ifcopenshell.util.placement as up
+    if len(pose) < 3 or not pose[2]:
+        return None
+    s = plan_geometry(f).S
+    m = up.get_local_placement(e.ObjectPlacement)
+    p0 = shapely.Point(m[0][3] * s, m[1][3] * s)
+    ink = shapely.MultiLineString(_paper_lines(f, e, k, pose))
+    p1 = shapely.ops.nearest_points(ink, p0)[0]
+    obj = polyline(drawing, [(p0.x, p0.y), (p1.x, p1.y)], z, classes=SHIFT_CLASS)
+    a = tool.Ifc.get_entity(obj)
+    a.Name = f"引线 {e.Tag or e.id()}"
+    api.drawing.assign_product(f, relating_product=e, related_object=a)
+    _WIRES.setdefault(drawing.id(), []).append(LineString([(p0.x, p0.y), (p1.x, p1.y)]).buffer(_den_of(drawing) / 1000.0 * WIRE_CLEAR_MM))
+    return obj
+
+
+_DOOR_ZONES: dict[int, object] = {}
+
+
+def _door_zones(f):
+    """门窗洞口和平开门扫过的扇形（_opening_zone 全部，米）合在一起，每个 IFC 文件算一次。"""
+    k = id(f)
+    if k not in _DOOR_ZONES:
+        geo = plan_geometry(f)
+        zs = [z_ for fr in (geo.frame(el) for el in geo.openings) if fr is not None for z_ in _opening_zone(fr)]
+        _DOOR_ZONES[k] = shapely.union_all(zs) if zs else shapely.Polygon()
+    return _DOOR_ZONES[k]
 
 
 _SWINGS: dict[int, object] = {}
@@ -2549,15 +2930,15 @@ def _swings(f):
     return _SWINGS[k]
 
 
-def _paper_outline(e, k, den):
+def _paper_outline(e, k, den, view=None):
     """按纸面大小用 SYMBOL 画的点位在平面上实际的笔画（米）：符号按 paper_pose 摆（镜像、画到一侧、再转的角度），绕放置点
     放大 k 倍、按构件放置变换，两侧各加 PAPER_INK_MM；圈起来的地方（圆、方框）连里面一起算。不用外框：开关的斜线、插座的
-    半圆旁边的空地还能写字。点位类型不在符号库里返回 None。"""
-    key = (e.id(), k, den)
+    半圆旁边的空地还能写字。view：视图 id（这张图上排开过的按排开后的摆法）。点位类型不在符号库里返回 None。"""
+    key = (e.id(), k, den, view)
     if key in _PAPER_OUTLINE:
         return _PAPER_OUTLINE[key]
     f = tool.Ifc.get()
-    lines = _paper_lines(f, e, k, paper_pose(f, e, k, den))
+    lines = _paper_lines(f, e, k, paper_pose(f, e, k, den, view))
     res = None
     if lines:
         ink = shapely.unary_union([LineString(pts) for pts in lines])

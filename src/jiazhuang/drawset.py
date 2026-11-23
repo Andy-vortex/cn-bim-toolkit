@@ -20,6 +20,7 @@ import ifcopenshell
 import ifcopenshell.api as api
 import ifcopenshell.api.drawing  # noqa: F401（assign_product）
 import ifcopenshell.util.element as uel
+import ifcopenshell.util.selector as usel
 import ifcopenshell.util.unit
 
 import bonsai.tool as tool
@@ -113,6 +114,22 @@ def configure_project() -> None:
     log("pack configured", props)
 
 
+MEP_STYLESHEET = f"{WORK}/cn-mep.css"
+
+
+def mep_stylesheet() -> str:
+    """水电图（插座布置、开关连线、给排水点位）的样式表：合并样式表后面再接约定包的 cn-mep.css（家具、洁具淡显，接线细实线）。
+    只给这几种视图用（add_view 的 stylesheet），别的图不受影响。configure_project 之后调用；返回写进视图的相对路径。"""
+    at = lambda p: os.path.join(os.path.dirname(tool.Ifc.get_path()), *p.split("/"))
+    with open(at(WORK_PATHS["StylesheetPath"]), encoding="utf-8") as fh:
+        base = fh.read()
+    with open(conventions.pack_file("cn-mep.css"), encoding="utf-8") as fh:
+        ours = fh.read()
+    with open(at(MEP_STYLESHEET), "w", encoding="utf-8") as fh:
+        fh.write(base + "\n\n" + ours)
+    return MEP_STYLESHEET
+
+
 def _write_symbols(path: str) -> None:
     """出图符号 = Bonsai 自带的 symbols.svg，加上约定包 symbols.json 里按纸面大小画的点位符号和它们的变体（symbols.svg_defs，
     同 id 的替换），写到 path（SymbolsPath）；视图里的 SYMBOL 标注引用它们（_paper_symbols）。"""
@@ -147,7 +164,8 @@ def _ensure_symbols() -> None:
         log("symbols written", rel, len(ids))
 
 
-OVERVIEW_POINTS = "IfcAlarm, IfcOutlet, IfcSwitchingDevice, IfcWasteTerminal, IfcRailing, IfcAudioVisualAppliance, "
+OVERVIEW_POINTS = ("IfcAlarm, IfcOutlet, IfcSwitchingDevice, IfcWasteTerminal, IfcRailing, IfcAudioVisualAppliance, "
+                   "IfcElectricDistributionBoard, IfcJunctionBox, IfcValve, ")
 
 
 def overview_exclude(den: int, furniture: bool, rest: str) -> str:
@@ -161,8 +179,11 @@ def overview_exclude(den: int, furniture: bool, rest: str) -> str:
     return q
 
 
-def add_view(name: str, target_view: str, hint, den: int, extents, margin_paper_mm=30.0, exclude: str | None = None, crop=None):
+def add_view(name: str, target_view: str, hint, den: int, extents, margin_paper_mm=30.0, exclude: str | None = None, crop=None,
+             stylesheet: str | None = None, symbols_for=(), z=None):
     """新建一个视图并设好比例、范围、过滤。extents = (x0, y0, x1, y1) 米（相机范围 = extents 四周再加 margin_paper_mm）。
+    stylesheet：这个视图自己的样式表（相对 IFC 所在目录，如水电图的 mep_stylesheet()）；symbols_for：视图本身不画的这几类构件
+    （平面图上剖切面以上的灯）也补纸面符号（_paper_symbols）；z：纸面符号挪开画时引线的高度（米，同别的标注）。
     crop = (x0, y0, x1, y1) 米：模型只画到这个框（分段图的切口），框外留给尺寸、轴号；存进 IFC（视图的 JZ_View 属性集），
     render_view 读它裁模型线，所以从保存的 IFC 重开重出也一样。"""
     f = tool.Ifc.get()
@@ -194,45 +215,66 @@ def add_view(name: str, target_view: str, hint, den: int, extents, margin_paper_
     edits = {"HumanScale": f"1:{den}", "Scale": f"1/{den}"}
     if exclude:
         edits["Exclude"] = exclude
+    if stylesheet:
+        edits["Stylesheet"] = stylesheet
     api.pset.edit_pset(f, pset=f.by_id(pset["id"]), properties=edits)
     log("view", name, target_view, f"1:{den}", "size(m)", round(cprops.width, 2), round(cprops.height, 2))
-    _paper_symbols(drawing)
+    _paper_symbols(drawing, symbols_for, z)
     return drawing
 
 
-def _paper_symbols(drawing) -> int:
+def _paper_symbols(drawing, extra=(), z=None) -> int:
     """视图里有 paper_scale 的点位（symbols.json：插座、开关、筒灯、地漏、紧急呼叫、监控）改用 Bonsai 的 SYMBOL 标注画，在任何
     比例下都和 1:paper_scale 时一样大：每个点位一个 SYMBOL（放置和点位相同，EPset_Annotation.Symbol = 符号键，
     IfcRelAssignsToProduct 关联到点位），Bonsai 画成 <use href="#符号键">（symbols.svg_defs）；这些类型再加进视图的 Exclude
     （按类型排除，同一类里别的类型照常画），模型线里不再按实际尺寸画一遍。比例正好是 paper_scale 时不换。
     只换视图本来会画、在裁切框里的点位（切口处的 <use> 由 _clip_model 和模型线一起裁）。符号代表贴墙的点位，要整个画在点位
     所在的房间里、不压墙：按 annotate.paper_pose 在点位放置上再转一个角度、或换成镜像、画到插入点一侧的变体（符号键加后缀，
-    symbols.VARIANTS）。返回换了几个。"""
+    symbols.VARIANTS）；水电图（PAPER_SHIFT）上同一面墙上互相压着、压门扇的符号沿墙排开（annotate.layout_paper），挪开的
+    加一条引线指回实际位置（shift_leader，引线画在高度 z，缺省是点位的高度）。extra：另补这几类构件（视图本身不画的，如
+    平面图上的灯），只补裁切框（没有框时是相机范围）里的、视图的 Exclude 没排掉的。
+    返回换了几个。"""
     from mathutils import Matrix
     from . import annotate
     f = tool.Ifc.get()
     den = _scale_den(drawing)
-    scales = {k: d for k, d in symbols.paper_scales(conventions.pack_file("symbols.json")).items() if d != den}
+    scales = {k: d for k, d in symbols.paper_scales(conventions.pack_file("symbols.json")).items() if d != den or extra}   # 补符号的视图一律用 SYMBOL
     if not scales:
         return 0
     bpy.context.view_layer.update()   # 刚挪过的相机，matrix_world 要求值后才是新位置
     crop, cam = view_crop(drawing), tool.Ifc.get_object(drawing).matrix_world.translation
     used, n = {}, 0   # 符号键 → IFC 类
-    for e in sorted(tool.Drawing.get_drawing_elements(drawing), key=lambda e: e.id()):
+    els = set(tool.Drawing.get_drawing_elements(drawing))
+    box = crop or (lambda w, h: (-w / 2, -h / 2, w / 2, h / 2))(*_VIEW_SIZE.get(drawing.id(), (1e9, 1e9))[:2])
+    if extra:   # 补画的构件也要经过视图的排除过滤（Exclude 选择器排掉的不补）
+        q = uel.get_pset(drawing, "EPset_Drawing", "Exclude")
+        drop = set(usel.filter_elements(f, q)) if q else set()
+        els |= {e for c in extra for e in f.by_type(c) if e not in drop}
+    todo = []
+    for e in sorted(els, key=lambda e: e.id()):
         t = None if e.is_a("IfcAnnotation") else uel.get_type(e)
         obj = tool.Ifc.get_object(e)
         if getattr(t, "Tag", None) not in scales or obj is None:
             continue
         used[t.Tag] = e.is_a()
         p = obj.matrix_world.translation
-        if crop and not (cam.x + crop[0] <= p.x <= cam.x + crop[2] and cam.y + crop[1] <= p.y <= cam.y + crop[3]):
+        if (crop or e.is_a() in extra) and not (cam.x + box[0] <= p.x <= cam.x + box[2] and cam.y + box[1] <= p.y <= cam.y + box[3]):
             continue   # 分区、分段图只画裁切框里的点位
-        suffix, turn = annotate.paper_pose(f, e, den / scales[t.Tag], den)
+        todo.append((e, t, obj, p))
+    if annotate.PAPER_SHIFT and todo:   # 水电图：同一面墙上的符号沿墙排开（点位坐标不动）
+        moved, kept = annotate.layout_paper(f, drawing.id(), [(e, den / scales[t.Tag]) for e, t, _, _ in todo], den)
+        log("paper layout", drawing.Name, "moved", moved, "kept", len(kept))
+    for e, t, obj, p in todo:
+        pose = annotate.paper_pose(f, e, den / scales[t.Tag], den, drawing.id())
+        suffix, turn = pose[:2]
+        shift = (pose[2] if len(pose) > 2 else 0.0) * ifcopenshell.util.unit.calculate_unit_scale(f)   # 沿墙挪开画（米）
         sym = core.add_annotation(tool.Ifc, tool.Collector, tool.Drawing, drawing=drawing, object_type="SYMBOL", relating_type=None)
-        sym.matrix_world = obj.matrix_world @ Matrix.Rotation(math.radians(turn), 4, "Z")
+        sym.matrix_world = obj.matrix_world @ Matrix.Translation((shift, 0.0, 0.0)) @ Matrix.Rotation(math.radians(turn), 4, "Z")
         a = tool.Ifc.get_entity(sym)
         api.pset.edit_pset(f, pset=api.pset.add_pset(f, product=a, name="EPset_Annotation"), properties={"Symbol": t.Tag + suffix})
         api.drawing.assign_product(f, relating_product=e, related_object=a)
+        if shift:   # 引线指回实际位置
+            annotate.shift_leader(f, drawing, e, den / scales[t.Tag], pose, p.z if z is None else z)
         n += 1
     if used:
         pset = uel.get_pset(drawing, "EPset_Drawing")
@@ -688,7 +730,16 @@ def _scope(sheet_svg: str) -> str:
     return f" d{m.group(1)}" if m else ""
 
 
-def _legend(pack, keys, den, x, y, width, walls, extra, extra_width, scope, title):
+LEADER_LEGEND = "引线端点为实际位置"   # 图例里引线一行的说明（水电图上沿墙挪开画的符号）
+
+
+def has_shift_leaders(drawing) -> bool:
+    """这张图上有没有沿墙挪开画的符号的引线（annotate.shift_leader 画的 LINEWORK，Name"引线 …"）。"""
+    return any(a.ObjectType == "LINEWORK" and (a.Name or "").startswith("引线 ")
+               for a in tool.Drawing.get_group_elements(tool.Drawing.get_drawing_group(drawing)))
+
+
+def _legend(pack, keys, den, x, y, width, walls, extra, extra_width, scope, title, leader=False):
     """图例的 SVG 片段（参数见 add_legend）。返回 (片段, 底边 y, 右边 x)。"""
     from .symbols import HEIGHT_CLASSES, item_polylines
     fs, pitch = LEGEND_MM, 1.35 * LEGEND_MM
@@ -727,6 +778,9 @@ def _legend(pack, keys, den, x, y, width, walls, extra, extra_width, scope, titl
             for pts in item_polylines(it):
                 d = " ".join(f"{'M' if i == 0 else 'L'} {x + 7 + px * s:.3f},{cy - (py - ymid) * s:.3f}" for i, (px, py) in enumerate(pts))
                 parts.append(f'<path d="{d}" stroke-width="0.3"/>')
+    if leader:   # 水电图上有沿墙挪开画的符号：一小段和引线一样的细线
+        cy = row(LEADER_LEGEND, 1.0)
+        parts.append(f'<path d="M {x + 2:.2f},{cy:.2f} L {x + 12:.2f},{cy:.2f}" stroke-width="0.13"/>')
     names = conventions.get("walls")
     for mat in [m_ for m_ in names if m_ in set(walls)]:
         cy = row(names[mat], 4.0)
@@ -739,7 +793,7 @@ def _legend(pack, keys, den, x, y, width, walls, extra, extra_width, scope, titl
 
 
 def add_legend(sheet_svg: str, pack_symbols: str, keys, den: int, x: float, y: float, width: float = 64.0,
-               walls=(), extra: str | None = None, title="图例", extra_width: float | None = None) -> float:
+               walls=(), extra: str | None = None, title="图例", extra_width: float | None = None, leader: bool = False) -> float:
     """在排好的图纸 SVG 上加图例（不加外框）。每行"符号 | 名称 | 默认安装高度"，名称 3.5mm，写不下就换行（wrap_text），
     不缩字。x、y：标题"图例"的左下角（mm）。width：图例宽（符号列 16mm + 名称 + 默认高度）；一套图的图例取同一个宽，
     同一条名称在各张图上断法一致。
@@ -747,11 +801,12 @@ def add_legend(sheet_svg: str, pack_symbols: str, keys, den: int, x: float, y: f
       （symbols.HEIGHT_CLASSES）在右侧写默认高度"H300"，图上只标和它不同的点位（annotate.point_heights，读同一份 symbols.json）；
     - walls：本图画出的墙材质名（annotate.wall_materials），按约定包 conventions.json 的 walls 顺序各一行；色块用和墙
       一样的 CSS 类（cut material-cnbearing 加上本图的 d<id> 前缀类），颜色和填充只在 cn.css 里定义；
-    - extra：最后一行只有文字（总图的房间简称对照），宽 extra_width（缺省同 width）。
-    返回图例底边 y（mm）；超出可放图区时记 JZLOG warn。三样都没有时不画。"""
-    if not (keys or walls or extra):
+    - extra：最后一行只有文字（总图的房间简称对照），宽 extra_width（缺省同 width）；
+    - leader：这张图上有沿墙挪开画的符号（has_shift_leaders），点位行后面加一行"引线端点为实际位置"，图形是一小段细线。
+    返回图例底边 y（mm）；超出可放图区时记 JZLOG warn。几样都没有时不画。"""
+    if not (keys or walls or extra or leader):
         return y
-    parts, bottom, _ = _legend(_pack(pack_symbols), keys, den, x, y, width, walls, extra, extra_width, _scope(sheet_svg), title)
+    parts, bottom, _ = _legend(_pack(pack_symbols), keys, den, x, y, width, walls, extra, extra_width, _scope(sheet_svg), title, leader)
     _append_svg(sheet_svg, parts)
     if bottom > AREA[3]:
         log("warn legend below drawing area", os.path.basename(sheet_svg), round(bottom, 1))

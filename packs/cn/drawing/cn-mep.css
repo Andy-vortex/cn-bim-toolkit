@@ -1,0 +1,15 @@
+/*
+ * 水电图（插座布置图、开关连线图、给排水点位图）追加的样式，接在合并样式表后面，只用于这几种视图（drawset.mep_stylesheet）。
+ * MIT 许可，见仓库根目录 LICENSE。
+ */
+
+/* 家具、洁具、橱柜淡显：点位跟着家具走，要看得见家具，又不能抢点位 */
+.IfcFurniture, .IfcFurniture path, .IfcFurnishingElement, .IfcFurnishingElement path,
+.IfcSanitaryTerminal, .IfcSanitaryTerminal path
+  { stroke: #9a9a9a; stroke-width: 0.13; }
+
+/* 开关到灯的接线：细实线 */
+.jz-wire { stroke: #000; stroke-width: 0.18; fill: none; }
+
+/* 符号沿墙挪开画时指回实际位置的引线（annotate.shift_leader）：细实线 */
+.jz-shift { stroke: #000; stroke-width: 0.13; fill: none; }

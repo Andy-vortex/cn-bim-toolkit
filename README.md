@@ -9,9 +9,10 @@
 | 读图：打散的天正 DXF → 房间、户、墙、门窗、轴网 | `dxfplan.py` | 实验 |
 | 方案与拆改（只动非承重隔墙） | `scheme.py`、`renovate.py` | 实验 |
 | 家具布置：房间摘要、布置意图 → 坐标、几何校验 | `furnish.py`，约定包 `packs/cn/furniture/` | 实验 |
+| 水电点位：规则表布点、回路、开关控制哪些灯、几何校验 | `mep.py`，约定包 `packs/cn/mep/` | 实验 |
 | 建模 → IFC4 | `plan2ifc.py`、`symbols.py` | 可用 |
 | 平面图、门窗表、图纸目录 | `drawset.py`、`annotate.py`、`openings.py`、`schedules.py`，约定包 `packs/cn/drawing/` | 可用 |
-| 水电点位图、顶面图 | 同上 | 实验 |
+| 水电图（插座布置、开关连线、给排水点位，回路表、点位统计表）、顶面图 | 同上 | 实验 |
 | 立面、大样 | — | 未开始 |
 | 规范自查 | `checker.py`，规则包 `packs/cn/rules/` | 可用 |
 | 渲染与漫游 | Blender Cycles、Pannellum | 未接入 |
@@ -46,6 +47,15 @@ PYTHONPATH=src python -m jiazhuang.demo_apartment build/furnish/recog.json
 python scripts/furnish.py context build/furnish/recog.json
 python scripts/furnish.py place build/furnish/recog.json packs/cn/furniture/example-intent.json build/furnish
 blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- build/furnish/recog.json build/furnish/out --scheme build/furnish/scheme.json --title 平面布置图
+```
+
+## 水电点位
+
+在带家具的方案上按规则表（[packs/cn/mep](packs/cn/mep/README.md)，条文号 + 自拟概括 + 参数，待原文核对）布插座、开关、灯、强弱电箱和给排水点，分回路，记开关控制哪些灯，再做几何校验；有违规退出 1，没放的点位和原因列在报告的 skipped 里。个例用可选的意图增删，不写坐标。建模时回路、给排水系统和开关—灯的连接写进 IFC；`--mep` 出插座布置图、开关连线图、给排水点位图和回路表、点位统计表。
+
+```bash
+python scripts/mep.py build/furnish/recog.json build/furnish/scheme.json build/mep
+blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- build/furnish/recog.json build/mep/sheets --scheme build/mep/scheme.json --mep --title "{kind}"
 ```
 
 ## 输出

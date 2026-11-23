@@ -62,6 +62,21 @@ def existing_file(p: str) -> str:
     return p
 
 
+def read_json(p: str, what: str, need=()):
+    """argparse 的 type：文件要在，是 JSON 对象，有 need 里的键（非空），否则报一行错（退出码 2）。"""
+    try:
+        with open(existing_file(p), encoding="utf-8-sig") as fh:
+            d = json.load(fh)
+    except ValueError:
+        d = None
+    if not isinstance(d, dict):
+        raise argparse.ArgumentTypeError(f"不是{what} JSON：{p}")
+    miss = [k for k in need if not d.get(k)]
+    if miss:
+        raise argparse.ArgumentTypeError(f"{what}里没有 {'、'.join(miss)}：{p}")
+    return d
+
+
 def json_script(data) -> str:
     """把数据原样内嵌进 HTML：<script type="application/json" id="data">，"</" 写成 "<\\/"，不会提前结束 script。"""
     return ('<script type="application/json" id="data">'

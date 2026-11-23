@@ -211,7 +211,7 @@ def build(out_path: str, pack_symbols: str) -> str:
     b.point("cn_socket", "插座 S5", 4550, 2800, 300, 90)         # 隔墙客厅侧
     b.point("cn_socket_splash", "防溅插座 S6 台盆", 4650, 2700, 1500, -90)
     b.point("cn_socket_splash", "防溅插座 S7 坐便", 6600, 3300, 400, 90)
-    b.point("cn_switch_2", "双联开关 K1 客厅", 4550, 1850, 1300, 90)
+    b.point("cn_switch_2", "双联开关 K1 客厅", 4550, 750, 1300, 90)         # 客厅门 M2 锁舌一侧（铰链在北头）
     b.point("cn_switch_1", "单联开关 K2 卫生间", 5800, 1950, 1300, 180)
     b.point("cn_switch_1", "单联开关 K3 玄关", 6600, 450, 1300, 90)
     # 灯具

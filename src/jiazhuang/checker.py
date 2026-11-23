@@ -138,7 +138,8 @@ class Model:
 
 
 def kind(e):
-    """构件归类：bed / call / grab / socket / socket_splash / camera / sanitary / other。"""
+    """构件归类：bed / call / grab / socket / socket_splash / socket_dedicated（专用三孔）/ socket_ac（空调）/ tv_outlet / data_outlet /
+    camera / sanitary / other。"""
     t = ue.get_type(e)
     tag = getattr(t, "Tag", None) if t is not None else None
     pt = ue.get_predefined_type(e)
@@ -150,6 +151,10 @@ def kind(e):
     if (e.is_a("IfcRailing") and pt in ("HANDRAIL", "GRABRAIL")) or "扶手" in name:
         return "grab"
     if e.is_a("IfcOutlet"):
+        other = {"AUDIOVISUALOUTLET": "tv_outlet", "DATAOUTLET": "data_outlet"}.get(pt) or \
+            {"cn_socket_3p": "socket_dedicated", "cn_socket_ac": "socket_ac"}.get(tag)
+        if other:
+            return other
         return "socket_splash" if (tag == "cn_socket_splash" or "防溅" in name or "防水" in name) else "socket"
     if (e.is_a("IfcAudioVisualAppliance") and pt == "CAMERA") or "监控" in name:
         return "camera"

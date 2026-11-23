@@ -6,8 +6,9 @@
            label 是房名标注点（不给就取 label_point）；type 覆盖家具布置用的房间类型（不给按房名查 room_types.json）
   zones:   [{id, ...}]         分区列表（旧方案里叫 cores）；出图时自动切的分段带 auto=True（见 split_zones），只用于出图，
                                不写进 rooms[].zone
-  items:   [{key, name, x, y, z, rot, room, params?, plan_id?}]   约定包符号（symbols.json 的键）的实例：床、插座、呼叫按钮……；
-           键是 lib:<类型名> 或 cn_<类型> 的是家具（furniture.json；furnish 布置，params 是 cn_ 类型的尺寸参数，plan_id 是布置意图里的 id）；room 是房间 id
+  items:   [{key, name, x, y, z, rot, room, params?, plan_id?, circuit?, controls?}]   约定包符号（symbols.json 的键）的实例：床、插座、呼叫按钮……；
+           键是 lib:<类型名> 或 cn_<类型> 的是家具（furniture.json；furnish 布置，params 是 cn_ 类型的尺寸参数，plan_id 是布置意图里的 id）；room 是房间 id；
+           mep 布的点位：plan_id 是"点位类型-房间 id-序号"，circuit 是回路号，controls 是开关控制的灯的 plan_id
   after:   拆改后的识别结果（walls/rooms/openings 都换成改后的几何）；没有拆改就不给
   demolish:[{polygon, reason, from, thickness}]  被拆掉的墙块
   changes: [{type, target, detail, zone}]        拆改清单

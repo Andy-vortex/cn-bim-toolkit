@@ -190,7 +190,7 @@ def _side(w) -> str:
     return ("E", "NE", "N", "NW", "W", "SW", "S", "SE")[int((ang + 22.5) // 45) % 8]
 
 
-def _on_wall(w, o) -> tuple[float, float] | None:
+def on_wall(w, o) -> tuple[float, float] | None:
     """门窗落在这条墙边上的起止（从墙的起点量，毫米）；不在这条边上返回 None。"""
     a, u, n, L = np.array(w["a"]), np.array(w["u"]), np.array(w["n"]), w["len"]
     if o.get("polygon"):   # 凸窗：轮廓贴着这条边的那一段
@@ -209,7 +209,7 @@ def _on_wall(w, o) -> tuple[float, float] | None:
     return (lo, hi) if hi - lo >= 50 else None
 
 
-def _rooms(rec: dict, sch: dict | None) -> list[dict]:
+def rooms_of(rec: dict, sch: dict | None) -> list[dict]:
     rec = (sch or {}).get("after") or rec
     use = {r["id"]: r for r in (sch or {}).get("rooms", [])}
     holes = []   # 门窗洞口在墙厚范围里的矩形（多放 20）：门洞条只在这里面
@@ -239,7 +239,7 @@ def room_context(rec: dict, sch: dict | None = None, only=None) -> dict:
     门向内开/向外开/推拉，窗台高）。only：只要这些房间（id 或房名）。"""
     ops = _openings(rec, sch)
     rooms = []
-    for rm in _rooms(rec, sch):
+    for rm in rooms_of(rec, sch):
         if only and rm["id"] not in only and rm["name"] not in only:
             continue
         x0, y0, x1, y1 = rm["poly"].bounds
@@ -247,7 +247,7 @@ def room_context(rec: dict, sch: dict | None = None, only=None) -> dict:
         for w in rm["walls"]:
             ws = []
             for o in ops:
-                span = _on_wall(w, o)
+                span = on_wall(w, o)
                 if span is None:
                     continue
                 e = {"id": o["id"], "kind": o["kind"], "from": round(span[0]), "to": round(span[1])}
@@ -275,31 +275,31 @@ class IntentError(ValueError):
     """整份意图的结构不对（不是对象、rooms 不是对象列表……）：命令行退出 2。单件写错不抛它，只记一行。"""
 
 
-def _num(spec, k):
+def num_field(spec, k):
     v = spec.get(k, 0)
     if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
         raise ValueError(f"{k} 要写毫米数")
     return float(v)
 
 
-def _text(spec, k, what="名字"):
+def text_field(spec, k, what="名字"):
     v = spec.get(k)
     if not isinstance(v, str) or not v:
         raise ValueError(f"{k} 要写{what}")
     return v
 
 
-def _frame(it):
+def frame(it):
     """家具的 (靠墙边中点, 沿墙 u, 朝里 n)。"""
     a = math.radians(it["rot"])
     return np.array([it["x"], it["y"]]), np.array([math.cos(a), math.sin(a)]), np.array([-math.sin(a), math.cos(a)])
 
 
 def _place(spec: dict, rm: dict, placed: dict, failed: set, later: set) -> dict:
-    pid = _text(spec, "id")
+    pid = text_field(spec, "id")
     if pid in placed:
         raise ValueError("id 重复")
-    t = TYPES.get(_text(spec, "key", "类型名"))
+    t = TYPES.get(text_field(spec, "key", "类型名"))
     if t is None:
         raise ValueError(f"未知类型 {spec['key']}（见 packs/cn/furniture/furniture.json）")
     modes = [m for m in MODES if m in spec]
@@ -311,10 +311,10 @@ def _place(spec: dict, rm: dict, placed: dict, failed: set, later: set) -> dict:
         raise ValueError(f"{mode} 摆法不认 {'、'.join(bad)}（可用：{'、'.join(COMMON + MODES[mode])}）")
     params = resolve(spec["key"], spec.get("params"))
     if "name" in spec:
-        _text(spec, "name")
+        text_field(spec, "name")
 
     def ref(k):
-        rid = _text(spec, k, "参照那件的 id")
+        rid = text_field(spec, k, "参照那件的 id")
         r = placed.get(rid)
         if r is None:
             raise ValueError(f"参照的 {rid} 没摆成" if rid in failed else f"参照的 {rid} 还没摆（写在它后面）" if rid in later
@@ -323,9 +323,9 @@ def _place(spec: dict, rm: dict, placed: dict, failed: set, later: set) -> dict:
 
     g = geom(spec["key"], params)
     w, d = g["width"], g["depth"]
-    off, gap = _num(spec, "offset"), _num(spec, "gap")
+    off, gap = num_field(spec, "offset"), num_field(spec, "gap")
     if mode == "wall":
-        wid = _text(spec, "wall", "墙边编号")
+        wid = text_field(spec, "wall", "墙边编号")
         W = next((x for x in rm["walls"] if x["id"] == wid), None)
         if W is None:
             raise ValueError(f"{wid} 不是{rm['name']}的墙（有 W1～W{len(rm['walls'])}）")
@@ -334,7 +334,7 @@ def _place(spec: dict, rm: dict, placed: dict, failed: set, later: set) -> dict:
             if "align" in spec:
                 raise ValueError("align 和 facing 只能选一个")
             r, rt = ref("facing")
-            p, _, n = _frame(r)
+            p, _, n = frame(r)
             s = float((p + n * rt["depth"] / 2 - a) @ u) + off
         else:
             al = spec.get("align", "center")
@@ -346,13 +346,13 @@ def _place(spec: dict, rm: dict, placed: dict, failed: set, later: set) -> dict:
         pos, rot = a + u * s + np.array(W["n"]) * gap, math.degrees(math.atan2(u[1], u[0]))
     elif mode == "front_of":
         r, rt = ref("front_of")
-        p, u, n = _frame(r)
+        p, u, n = frame(r)
         pos, rot = p + n * (rt["depth"] + gap + d) + u * off, r["rot"] + 180.0
     else:
         r, rt = ref("beside")
         if spec.get("side") not in ("left", "right"):
             raise ValueError("side 是 left 或 right（那件家具自己的左右）")
-        p, u, _ = _frame(r)
+        p, u, _ = frame(r)
         k = -1.0 if spec["side"] == "left" else 1.0
         pos, rot = p + u * k * (rt["width"] / 2 + gap + w / 2), r["rot"]
     it = {"key": spec["key"], "name": spec.get("name") or t["name"], "x": round(float(pos[0]), 1), "y": round(float(pos[1]), 1),
@@ -362,7 +362,7 @@ def _place(spec: dict, rm: dict, placed: dict, failed: set, later: set) -> dict:
     return it
 
 
-def _find_room(rooms, ref):
+def find_room(rooms, ref):
     if not isinstance(ref, str) or not ref:
         return "room 要写房名或房间 id"
     hit = [r for r in rooms if r["id"] == ref] or [r for r in rooms if r["name"] == ref]
@@ -389,11 +389,11 @@ def solve(intent: dict, rec: dict, sch: dict | None = None) -> tuple[list, list]
     """布置意图 → (家具 items, 错误)。确定性换算；一件摆不了记一行原因（check="intent"），参照它的也摆不了。
     结构不对（check_intent）抛 IntentError。"""
     check_intent(intent)
-    rooms = _rooms(rec, sch)
+    rooms = rooms_of(rec, sch)
     items, errors, placed, failed = [], [], {}, set()
     later = {s.get("id") for b in intent["rooms"] for s in b.get("items", []) if isinstance(s, dict) and isinstance(s.get("id"), str)}
     for blk in intent["rooms"]:
-        rm = _find_room(rooms, blk.get("room"))
+        rm = find_room(rooms, blk.get("room"))
         if isinstance(rm, str):
             errors.append({"room": str(blk.get("room")), "item": "", "check": "intent", "msg": rm})
             failed |= {s.get("id") for s in blk.get("items", []) if isinstance(s, dict) and isinstance(s.get("id"), str)}
@@ -414,13 +414,13 @@ def solve(intent: dict, rec: dict, sch: dict | None = None) -> tuple[list, list]
 
 
 # ---------------------------------------------------------------- 校验
-def _to_world(it, g):
+def to_world(it, g):
     return shapely.affinity.translate(shapely.affinity.rotate(g, it["rot"], origin=(0, 0)), it["x"], it["y"])
 
 
 def footprint(it) -> Polygon:
     """家具的平面外轮廓（毫米，图纸坐标）。"""
-    return _to_world(it, geom(it["key"], it.get("params"))["outline"])
+    return to_world(it, geom(it["key"], it.get("params"))["outline"])
 
 
 def _door_fronts(fr, dep):
@@ -445,7 +445,7 @@ def validate(items: list, rec: dict, sch: dict | None = None) -> list[dict]:
     窗前 window_front_mm 进深；窗台高识别结果没有时用 window_sill_mm）、aisle 从房门到使用面没有通道净宽、use_blocked 使用面
     被别的家具、墙占了或伸出房间。"""
     tol, low = RULES["tolerance_mm2"], RULES["block_below_mm"]
-    rooms = {r["id"]: r for r in _rooms(rec, sch)}
+    rooms = {r["id"]: r for r in rooms_of(rec, sch)}
     rec2 = (sch or {}).get("after") or rec
     walls = unary_union([Polygon(w["polygon"]).buffer(0) for w in rec2["walls"] if len(w["polygon"]) >= 3])
     doors = [(o, openings.rec_opening_zones(o), openings.rec_frame(o)) for o in rec2["openings"] if o["kind"] == "door" and not o.get("polygon")]
@@ -455,7 +455,7 @@ def validate(items: list, rec: dict, sch: dict | None = None) -> list[dict]:
         out = [Polygon(o["polygon"]).buffer(0)]
         for rm in rooms.values():
             for w in rm["walls"]:
-                if s := _on_wall(w, o):
+                if s := on_wall(w, o):
                     a, u, n = np.array(w["a"]), np.array(w["u"]), np.array(w["n"])
                     out.append(Polygon([a + u * s[0], a + u * s[1], a + u * s[1] + n * dep, a + u * s[0] + n * dep]))
         return unary_union(out)
@@ -466,9 +466,9 @@ def validate(items: list, rec: dict, sch: dict | None = None) -> list[dict]:
         if it["key"] not in TYPES:
             continue
         g = geom(it["key"], it.get("params"))
-        uses = [_to_world(it, u) for u in g["use"]]
+        uses = [to_world(it, u) for u in g["use"]]
         F.append({"it": it, "id": it.get("plan_id") or it["name"], "fp": footprint(it), "z0": it["z"], "z1": it["z"] + g["height"],
-                  "parts": [(_to_world(it, p), it["z"] + h) for p, h in g["parts"]], "uses": uses, "use": unary_union(uses) if uses else None, "use_any": g["use_any"], "room": rooms.get(it["room"])})
+                  "parts": [(to_world(it, p), it["z"] + h) for p, h in g["parts"]], "uses": uses, "use": unary_union(uses) if uses else None, "use_any": g["use_any"], "room": rooms.get(it["room"])})
     out = []
 
     def add(f, check, value, unit, msg, other=None):

@@ -371,19 +371,64 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
                                    "Source": "原图 DOTE 层轴线 + _AXISO 轴号"})
 
     # 床和设施：约定包符号的类型；家具（furniture.json 的键）见 place_item
-    types = sym.create_types(f, sym.load_pack(pack_symbols))
+    pack = sym.load_pack(pack_symbols)
+    types = sym.create_types(f, pack)
     furn = {}
-    n_item = 0
+    placed = []
     for it in sch["items"]:
         where = spaces.get(it["room"], storey)
         if it["key"] in furnish.TYPES:
             occ = place_item(f, furn, it, it["x"] - OX, it["y"] - OY, z0 + it["z"], where)
         else:
             occ = sym.place_occurrence(f, types, it["key"], it["name"], it["x"] - OX, it["y"] - OY, z0 + it["z"], it["rot"], container=where)
+            if it.get("plan_id"):   # 布点器的点位：plan_id 写进 Tag，回路、控制关系和方案对得上
+                occ.Tag = it["plan_id"]
+            placed.append((it, occ))
         zone(occ, it["x"])
-        n_item += 1
+    links = _mep_links(f, placed, {r["id"]: r.get("unit") or "" for r in rec["rooms"]}, pack)
 
     f.write(out_path)
     return {"ifc": out_path, "offset": (OX, OY), "z0": z0, "walls": n_wall, "spaces": len(spaces), "doors": n_door,
-            "windows": n_win, "items": n_item, "axes": (len(axes["x"]), len(axes["y"])),
-            "extents_m": ((min(xs) - OX) / 1000, (min(ys) - OY) / 1000, (max(xs) - OX) / 1000, (max(ys) - OY) / 1000)}
+            "windows": n_win, "items": len(sch["items"]), "axes": (len(axes["x"]), len(axes["y"])),
+            "extents_m": ((min(xs) - OX) / 1000, (min(ys) - OY) / 1000, (max(xs) - OX) / 1000, (max(ys) - OY) / 1000), **links}
+
+
+def _mep_links(f, placed, unit_of: dict, pack: dict) -> dict:
+    """水电关系：带 circuit 的点位按（户, 回路号）归到 IfcDistributionCircuit；符号库写了 system 的给排水点归到冷水、热水、排水
+    系统（IfcDistributionSystem，全楼层各一个）；开关和它控制的灯（controls）用端口连起来：开关每控一盏灯一个 SOURCE 端口，
+    灯每个控它的开关一个 SINK 端口（IfcRelConnectsPorts，connect_port 的 direction 要传 SOURCE）。"""
+    groups = {}
+    for it, occ in placed:
+        if it.get("circuit"):
+            groups.setdefault(("IfcDistributionCircuit", it["circuit"], unit_of.get(it["room"], "")), []).append(occ)
+        if s := pack[it["key"]].get("system"):
+            groups.setdefault(("IfcDistributionSystem", s["name"], s["type"]), []).append(occ)
+    if not groups and not any(it.get("controls") for it, _ in placed):
+        return {}
+    importlib.import_module("ifcopenshell.api.system")
+    from . import mep
+    for (cls, name, extra), occs in groups.items():
+        s = api.system.add_system(f, ifc_class=cls)
+        if cls == "IfcDistributionCircuit":   # extra 是户
+            c = mep.CIRCUITS.get(name.rstrip("0123456789"), {})
+            attrs = {"Name": name, "Description": extra or None, "LongName": c.get("name"), "PredefinedType": c.get("system", "NOTDEFINED")}
+        else:
+            attrs = {"Name": name, "PredefinedType": extra}
+        api.system.edit_system(f, system=s, attributes=attrs)
+        api.system.assign_system(f, products=occs, system=s)
+    lights = {it["plan_id"]: occ for it, occ in placed if it.get("plan_id")}
+    n = 0
+    for it, occ in placed:
+        for lid in it.get("controls") or []:
+            if lid not in lights:
+                log("controls: no light", it.get("plan_id"), lid)
+                continue
+            ports = []
+            for e, way in ((occ, "SOURCE"), (lights[lid], "SINK")):
+                p = api.system.add_port(f, element=e)
+                p.Name, p.FlowDirection, p.PredefinedType, p.SystemType = f"{it['plan_id']}→{lid}", way, "CABLE", "LIGHTING"
+                ports.append(p)
+            api.system.connect_port(f, port1=ports[0], port2=ports[1], direction="SOURCE")
+            n += 1
+    log("mep", "systems", len(groups), "links", n)
+    return {"systems": len(groups), "links": n}

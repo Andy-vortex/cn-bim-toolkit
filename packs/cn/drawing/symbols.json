@@ -1,5 +1,5 @@
 {
-  "_说明": "中国家装平面符号库 v0.1。坐标单位 mm，局部坐标：原点在构件定位点，x 沿墙向右，y 垂直于墙指向室内。图形参照 GB/T 50786-2012《建筑电气制图标准》、GB/T 50106-2010《建筑给水排水制图标准》的常用画法简化而成，未逐条对照原文，待专业人员复核。items 支持 polyline（点列）、circle（cx, cy, r）、arc（cx, cy, r, 起始角, 终止角，单位度）、ellipse（cx, cy, rx, ry）。paper_scale：符号类点位（插座、开关、筒灯、地漏、紧急呼叫、监控）在任何比例下都按 1:paper_scale 时的纸面大小画（出图时换成 Bonsai 的 SYMBOL 标注，见 drawset.add_view）；没有这一项的（吸顶灯、洁具、家具、扶手）按实际尺寸画。",
+  "_说明": "中国家装平面符号库 v0.1。坐标单位 mm，局部坐标：原点在构件定位点，x 沿墙向右，y 垂直于墙指向室内。图形参照 GB/T 50786-2012《建筑电气制图标准》、GB/T 50106-2010《建筑给水排水制图标准》的常用画法简化而成，未逐条对照原文，待专业人员复核。items 支持 polyline（点列）、circle（cx, cy, r）、arc（cx, cy, r, 起始角, 终止角，单位度）、ellipse（cx, cy, rx, ry）。paper_scale：符号类点位（插座、开关、吸顶灯、筒灯、地漏、紧急呼叫、监控、强弱电箱、给排水点）在任何比例下都按 1:paper_scale 时的纸面大小画（出图时换成 Bonsai 的 SYMBOL 标注，见 drawset.add_view）；没有这一项的（洁具、家具、扶手）按实际尺寸画。字母（K、TV、TD、L、R、P、LEB）是折线画的，带 letter 标记（true）：跟着符号转，转到会倒着读时换成字母正过来的变体（symbols.VARIANTS 的 _u），镜像时只挪位置、不镜像。排水点的圆圈偏开画、带一条短线指回实际位置（台盆、水槽下的排水点和冷热水点挨着）。system：给排水点归哪个系统（plan2ifc 建 IfcDistributionSystem）。psets：类型上另写的属性集。",
   "types": {
     "cn_socket": {
       "ifc_type": "IfcOutletType", "predefined": "POWEROUTLET", "name": "五孔插座",
@@ -48,7 +48,7 @@
     "cn_light_ceiling": {
       "ifc_type": "IfcLightFixtureType", "predefined": "POINTSOURCE", "name": "吸顶灯",
       "legend": "吸顶灯", "default_height": 2580, "body": [400, 400, 60], "body_centered": true,
-      "views": ["REFLECTED_PLAN_VIEW"],
+      "views": ["REFLECTED_PLAN_VIEW"], "paper_scale": 50,
       "items": [
         {"circle": [0, 0, 200]},
         {"polyline": [[-141, -141], [141, 141]]},
@@ -87,7 +87,7 @@
     "cn_floor_drain": {
       "ifc_type": "IfcWasteTerminalType", "predefined": "FLOORTRAP", "name": "地漏",
       "legend": "地漏（DN50）", "default_height": 0, "body": [100, 100, 10], "body_centered": true,
-      "views": ["PLAN_VIEW"], "paper_scale": 50,
+      "views": ["PLAN_VIEW"], "paper_scale": 50, "system": {"type": "DRAINAGE", "name": "排水"},
       "items": [
         {"circle": [0, 0, 70]},
         {"polyline": [[-70, 0], [70, 0]]},
@@ -131,6 +131,134 @@
       "items": [
         {"polyline": [[-160, -90], [100, -90], [100, 90], [-160, 90], [-160, -90]]},
         {"polyline": [[100, 0], [240, 80], [240, -80], [100, 0]]}
+      ]
+    },
+    "cn_socket_3p": {
+      "ifc_type": "IfcOutletType", "predefined": "POWEROUTLET", "name": "专用三孔插座", "legend": "单相三极插座（专用）", "default_height": 300, "body": [86, 30, 86],
+      "views": ["PLAN_VIEW"], "paper_scale": 50,
+      "items": [
+        {"polyline": [[-110, 30], [110, 30]]},
+        {"arc": [0, 30, 110, 0, 180]},
+        {"polyline": [[0, 30], [0, 230]]},
+        {"polyline": [[-70, 230], [70, 230]]}
+      ]
+    },
+    "cn_socket_ac": {
+      "ifc_type": "IfcOutletType", "predefined": "POWEROUTLET", "name": "空调插座", "legend": "空调插座（单相三极，K）", "default_height": 2200, "body": [86, 30, 86],
+      "views": ["PLAN_VIEW"], "paper_scale": 50,
+      "items": [
+        {"polyline": [[-110, 30], [110, 30]]},
+        {"arc": [0, 30, 110, 0, 180]},
+        {"polyline": [[0, 30], [0, 230]]},
+        {"polyline": [[-70, 230], [70, 230]]},
+        {"polyline": [[130, 130], [130, 230]], "letter": true},
+        {"polyline": [[190, 230], [130, 170]], "letter": true},
+        {"polyline": [[151, 192], [190, 130]], "letter": true}
+      ]
+    },
+    "cn_tv": {
+      "ifc_type": "IfcOutletType", "predefined": "AUDIOVISUALOUTLET", "name": "电视插座", "legend": "电视插座（TV）", "default_height": 1100, "body": [86, 30, 86],
+      "views": ["PLAN_VIEW"], "paper_scale": 50,
+      "items": [
+        {"polyline": [[-110, 30], [110, 30], [110, 200], [-110, 200], [-110, 30]]},
+        {"polyline": [[-85, 165], [-15, 165]], "letter": true},
+        {"polyline": [[-50, 165], [-50, 65]], "letter": true},
+        {"polyline": [[15, 165], [50, 65], [85, 165]], "letter": true}
+      ]
+    },
+    "cn_data": {
+      "ifc_type": "IfcOutletType", "predefined": "DATAOUTLET", "name": "网络插座", "legend": "信息（网络）插座（TD）", "default_height": 300, "body": [86, 30, 86],
+      "views": ["PLAN_VIEW"], "paper_scale": 50,
+      "items": [
+        {"polyline": [[-110, 30], [110, 30], [110, 200], [-110, 200], [-110, 30]]},
+        {"polyline": [[-85, 165], [-15, 165]], "letter": true},
+        {"polyline": [[-50, 165], [-50, 65]], "letter": true},
+        {"polyline": [[15, 65], [15, 165], [57, 165], [85, 140], [85, 90], [57, 65], [15, 65]], "letter": true}
+      ]
+    },
+    "cn_switch_2way": {
+      "ifc_type": "IfcSwitchingDeviceType", "predefined": "TOGGLESWITCH", "name": "双控开关", "legend": "单联双控开关", "default_height": 1300, "body": [86, 30, 86],
+      "views": ["PLAN_VIEW"], "paper_scale": 50, "psets": {"Pset_SwitchingDeviceTypeToggleSwitch": {"SwitchFunction": "DOUBLETHROWSWITCH", "NumberOfGangs": 1}},
+      "items": [
+        {"circle": [0, 150, 55]},
+        {"polyline": [[-141, 9], [141, 291]]},
+        {"polyline": [[141, 291], [186, 246]]},
+        {"polyline": [[-141, 9], [-186, 54]]}
+      ]
+    },
+    "cn_switch_3": {
+      "ifc_type": "IfcSwitchingDeviceType", "predefined": "TOGGLESWITCH", "name": "三联开关", "legend": "三联单控开关", "default_height": 1300, "body": [86, 30, 86],
+      "views": ["PLAN_VIEW"], "paper_scale": 50, "psets": {"Pset_SwitchingDeviceTypeToggleSwitch": {"NumberOfGangs": 3}},
+      "items": [
+        {"circle": [0, 90, 55]},
+        {"polyline": [[39, 129], [190, 280]]},
+        {"polyline": [[190, 280], [235, 235]]},
+        {"polyline": [[150, 240], [195, 195]]},
+        {"polyline": [[110, 200], [155, 155]]}
+      ]
+    },
+    "cn_panel": {
+      "ifc_type": "IfcElectricDistributionBoardType", "predefined": "CONSUMERUNIT", "name": "强电箱", "legend": "户配电箱（强电箱）", "default_height": 1800, "body": [400, 120, 300],
+      "views": ["PLAN_VIEW"], "paper_scale": 50,
+      "items": [
+        {"polyline": [[-200, 30], [200, 30], [200, 150], [-200, 150], [-200, 30]]},
+        {"polyline": [[0, 30], [0, 150]]},
+        {"polyline": [[0, 110], [40, 150]]},
+        {"polyline": [[0, 70], [80, 150]]},
+        {"polyline": [[0, 30], [120, 150]]},
+        {"polyline": [[40, 30], [160, 150]]},
+        {"polyline": [[80, 30], [200, 150]]},
+        {"polyline": [[120, 30], [200, 110]]},
+        {"polyline": [[160, 30], [200, 70]]}
+      ]
+    },
+    "cn_infobox": {
+      "ifc_type": "IfcJunctionBoxType", "predefined": "DATA", "name": "弱电箱", "legend": "信息配线箱（弱电箱）", "default_height": 500, "body": [300, 120, 300],
+      "views": ["PLAN_VIEW"], "paper_scale": 50,
+      "items": [
+        {"polyline": [[-150, 30], [150, 30], [150, 150], [-150, 150], [-150, 30]]},
+        {"polyline": [[-150, 30], [150, 150]]},
+        {"polyline": [[-150, 150], [150, 30]]}
+      ]
+    },
+    "cn_leb": {
+      "ifc_type": "IfcJunctionBoxType", "predefined": "POWER", "name": "局部等电位端子箱", "legend": "局部等电位端子箱（LEB）", "default_height": 300, "body": [240, 80, 160],
+      "views": ["PLAN_VIEW"], "paper_scale": 50,
+      "items": [
+        {"polyline": [[-130, 30], [130, 30], [130, 150], [-130, 150], [-130, 30]]},
+        {"polyline": [[-105, 130], [-105, 50], [-55, 50]], "letter": true},
+        {"polyline": [[25, 130], [-25, 130], [-25, 50], [25, 50]], "letter": true},
+        {"polyline": [[-25, 90], [15, 90]], "letter": true},
+        {"polyline": [[55, 50], [55, 130], [90, 130], [105, 118], [105, 102], [90, 90], [55, 90]], "letter": true},
+        {"polyline": [[90, 90], [105, 78], [105, 62], [90, 50], [55, 50]], "letter": true}
+      ]
+    },
+    "cn_water_cold": {
+      "ifc_type": "IfcValveType", "predefined": "STOPCOCK", "name": "冷水点", "legend": "给水点（冷水，L）", "default_height": 500, "body": [60, 60, 60],
+      "views": ["PLAN_VIEW"], "paper_scale": 50, "system": {"type": "DOMESTICCOLDWATER", "name": "冷水"},
+      "items": [
+        {"circle": [-90, 110, 80]},
+        {"polyline": [[0, 30], [-30, 57]]},
+        {"polyline": [[-115, 150], [-115, 70], [-65, 70]], "letter": true}
+      ]
+    },
+    "cn_water_hot": {
+      "ifc_type": "IfcValveType", "predefined": "STOPCOCK", "name": "热水点", "legend": "给水点（热水，R）", "default_height": 500, "body": [60, 60, 60],
+      "views": ["PLAN_VIEW"], "paper_scale": 50, "system": {"type": "DOMESTICHOTWATER", "name": "热水"},
+      "items": [
+        {"circle": [90, 110, 80]},
+        {"polyline": [[0, 30], [30, 57]]},
+        {"polyline": [[65, 70], [65, 150], [102, 150], [115, 138], [115, 122], [102, 110], [65, 110]], "letter": true},
+        {"polyline": [[88, 110], [115, 70]], "letter": true}
+      ]
+    },
+    "cn_drain": {
+      "ifc_type": "IfcWasteTerminalType", "predefined": "WASTETRAP", "name": "排水点", "legend": "排水点（P）", "default_height": 0, "body": [60, 60, 60],
+      "views": ["PLAN_VIEW"], "paper_scale": 50, "system": {"type": "DRAINAGE", "name": "排水"},
+      "items": [
+        {"polyline": [[0, 20], [0, 110]]},
+        {"circle": [0, 190, 80]},
+        {"polyline": [[-25, 150], [-25, 230], [12, 230], [25, 218], [25, 202], [12, 190], [-25, 190]], "letter": true}
       ]
     }
   }
