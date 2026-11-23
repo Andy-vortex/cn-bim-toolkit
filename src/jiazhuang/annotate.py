@@ -2200,7 +2200,33 @@ def block_plan(f, crop, kinds=None, cut_pos=None):
                        "margin": side_margin_mm(len(chains), bool(sel))}
     if oblique:
         log("openings on oblique walls, not in detail chains", sorted(oblique))
+    # 外开的平开门（入户门常见）门扇扫到外轮廓以外时，那一侧的尺寸、轴号排到门扇以外：外包并上门扇（比例也按它算）；
+    # 尺寸量的仍是墙（各道的端点、轴线在上面已经定了）
+    sw = _swings_out(f, crop, kinds)
+    if sw is not None:
+        sx0, sy0, sx1, sy1 = sw.bounds
+        env = (min(env[0], sx0), min(env[1], sy0), max(env[2], sx1), max(env[3], sy1))
     return {"crop": tuple(crop), "env": env, "kinds": kinds, "sides": sides}
+
+
+def _swings_out(f, crop, kinds):
+    """平开门扇扫到建筑外轮廓以外的部分（米）；没有返回 None。只算本图的：裁切框外扩到外墙面一侧以外（门扇在框外），切口一侧不外扩。"""
+    geo = plan_geometry(f)
+    ext = lambda side: 3.0 if kinds[side] == "ext" else 0.0
+    clip = _box(crop[0] - ext("left"), crop[1] - ext("bottom"), crop[2] + ext("right"), crop[3] + ext("top"))
+    # 外轮廓只按墙和房间算：geo.building 还并了门窗构件，开到 90° 的门扇也在里面
+    base = shapely.ops.unary_union(list(geo.wall_polys) + [p for p in (geo.fp(s) for s in geo.spaces) if p is not None])
+    base = base.buffer(0.15, join_style="mitre").buffer(-0.15, join_style="mitre")
+    parts = []
+    for el in geo.openings:
+        fr = geo.frame(el) if el.is_a("IfcDoor") else None
+        if fr is None or fr["bay"]:
+            continue
+        for z in _opening_zone(fr)[1:]:
+            g = z.difference(base).intersection(clip)
+            if g.area > 0.01:
+                parts.append(g)
+    return shapely.ops.unary_union(parts) if parts else None
 
 
 def grid_annotations(f, drawing, den, edge, z=0.0, mode="block", spans=None, plan=None):

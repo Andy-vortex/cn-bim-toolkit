@@ -41,6 +41,7 @@ from shapely.geometry import LineString, Point, Polygon, box
 from shapely.ops import unary_union
 
 from . import conventions, furngen, furnish, openings, scheme
+from .unitview import unit_ids  # noqa: F401（户 id 只有一份，按户出图也用它）
 
 PACK = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "packs", "cn", "mep"))
 with open(os.path.join(PACK, "points.json"), encoding="utf-8") as _fh:
@@ -682,11 +683,6 @@ def validate(items: list, rec: dict, sch: dict | None = None, units=None) -> lis
                         "msg": f"{cid}：{unit + ' ' if unit else ''}这一路 {n} 个，超过 {c['max']}"})
     order = {c: i for i, c in enumerate(CHECKS)}
     return sorted(out, key=lambda v: (v["room_id"], v["item"], order[v["check"]], str(v["with"])))
-
-
-def unit_ids(rec: dict, sch: dict | None = None) -> list[str]:
-    """识别结果（有拆改时是拆改后）里的户 id。"""
-    return sorted({r["unit"] for r in ((sch or {}).get("after") or rec)["rooms"] if r.get("unit")})
 
 
 def mep(rec: dict, sch: dict, intent: dict | None = None, units=None) -> tuple[dict, dict]:

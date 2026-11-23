@@ -221,6 +221,8 @@ def is_entrance_door(el, geo: "PlanGeometry | None" = None) -> bool:
     rooms = geo.rooms_of(el)
     if any(_has(geo.usage(s), ent["exclude_words"]) for s in rooms):
         return False
+    if uel.get_psets(el).get("JZ_Opening", {}).get("Entrance"):   # 按户出图：公共一侧不在模型里，裁的时候按 ③ 认好记下的（unitview）
+        return True
     public = lambda s: bool(uel.get_psets(s).get("JZ_Space", {}).get("Public")) or _has(geo.usage(s), ent["public_room_words"])
     fr = geo.frame(el)
     if fr is not None and fr.get("out") is not None:

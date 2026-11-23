@@ -58,6 +58,14 @@ python scripts/mep.py build/furnish/recog.json build/furnish/scheme.json build/m
 blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- build/furnish/recog.json build/mep/sheets --scheme build/mep/scheme.json --mep --title "{kind}"
 ```
 
+## 按户出图
+
+一层有几户时，`--unit` 只出其中一户的一整套图（带不带 `--mep` 都行）：只画这一户的房间和围着它的墙，尺寸、轴号、门窗表、回路表都只算这一户，比例取 A3 放得下的最大一档（1:50、1:60、1:80、1:100…）。每户一套图号，从 A-00 起；要出所有户就循环调用。
+
+```bash
+blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- build/floor/recog.json build/floor/U1 --unit U1 --project 示例工程
+```
+
 ## 输出
 
 ```text

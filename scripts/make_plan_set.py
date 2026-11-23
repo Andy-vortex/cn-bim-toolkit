@@ -49,7 +49,8 @@ def parse_args(argv):
     p.add_argument("--storey-name", default="标准层", help="图名里的层次，如\"四～十七层\"（缺省：%(default)s）")
     p.add_argument("--labels", type=printing.existing_file, metavar="简称.json",
                    help='房间名表 {"abbr": {用途: 总图简称}, "short": {用途: 分段图上的短名}, "legend_text": "总图图例简称对照后面的补充说明"}')
-    p.add_argument("--title", help="总图名，可用 {storey}（缺省\"{storey}平面图\"，有分区或分段时\"{storey}组合平面图\"）")
+    p.add_argument("--title", help="总图名，可用 {storey}、{unit}（缺省\"{storey}平面图\"，有分区或分段时\"{storey}组合平面图\"，"
+                                   "--unit 时\"{unit} 平面图\"）")
     p.add_argument("--zone-title", help="分区、分段平面的图名，可用 {storey}、{id}（缺省：分段\"{storey} {id}平面图\"，分区\"{id} 分区平面\"）")
     p.add_argument("--prefix", default="A", help="图号前缀（缺省：%(default)s）")
     p.add_argument("--mep", action="store_true",
@@ -57,18 +58,34 @@ def parse_args(argv):
                         "表格是回路表、点位统计表，不出门窗表、不标门窗编号；--title、--zone-title 可用 {kind}（图的种类，没写时空一格接在图名后面）")
     p.add_argument("--split", default="auto", choices=("auto", "none"),
                    help="方案没有分区、整层一张 A3 放不下 1:100 时，auto 自动沿 x 切成几段出分段平面，none 不切（缺省：%(default)s）")
+    p.add_argument("--unit", metavar="户号",
+                   help="只出这一户（识别结果里的户 id，如 U1）的一整套图：只画这一户的房间和围着它的墙，比例取 A3 放得下的最大一档（1:150 也放不下时退出 1）；"
+                        "不分区、不分段（--split、--zone-title 不起作用）")
     a = p.parse_args(argv)
     if err := conventions.check_pack():
         p.error(err)
+    own = None
+    if a.unit is not None:   # 户号在解析参数时就查：不存在退出 2，列出识别结果里的户
+        from jiazhuang import unitview
+        try:
+            rec = printing.read_json(a.recognition, "识别结果")
+            sch = printing.read_json(a.scheme, "方案") if a.scheme else None
+        except argparse.ArgumentTypeError as e:
+            p.error(str(e))
+        ids = unitview.unit_ids(rec, sch)
+        if a.unit not in ids:
+            p.error(f"没有户 {a.unit}（识别结果里的户：{'、'.join(ids) or '无'}）")
+        own = {r["id"] for r in ((sch or {}).get("after") or rec)["rooms"] if r.get("unit") == a.unit}
     if a.mep:   # 水电图要有 scripts/mep.py 布过点位的方案，没有点位时三张图都是空的：解析参数时就报错（退出码 2）
         from jiazhuang import mep
         try:
             items = printing.read_json(a.scheme, "方案").get("items", []) if a.scheme else []
         except argparse.ArgumentTypeError as e:
             p.error(str(e))
-        if not isinstance(items, list) or not any(isinstance(it, dict) and mep.point_type(it) for it in items):
+        if not isinstance(items, list) or not any(isinstance(it, dict) and mep.point_type(it) and (own is None or it.get("room") in own)
+                                                  for it in items):
             p.error("--mep 要给带点位的方案（scripts/mep.py 的输出），用 --scheme 指定" if not a.scheme
-                    else f"--mep 要给带点位的方案（scripts/mep.py 的输出）：{a.scheme} 里没有点位")
+                    else f"--mep 要给带点位的方案（scripts/mep.py 的输出）：{a.scheme} 里没有{'' if own is None else ' ' + a.unit + ' 的'}点位")
     return a
 
 
@@ -76,7 +93,7 @@ A = parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.
 
 import bpy  # noqa: E402
 import bonsai.tool as tool  # noqa: E402
-from jiazhuang import annotate, checker, drawset, openings, plan2ifc, renovate, scheme, schedules, symbols  # noqa: E402
+from jiazhuang import annotate, checker, drawset, openings, plan2ifc, renovate, scheme, schedules, symbols, unitview  # noqa: E402
 
 SYMBOLS = conventions.pack_file("symbols.json")
 HEIGHTS = symbols.default_heights(SYMBOLS)   # 点位默认安装高度：图例写它，图上只标和它不同的
@@ -92,9 +109,12 @@ def read_json(p):
 LABELS = read_json(A.labels) if A.labels else {}
 
 OUT = os.path.abspath(A.out)
-os.makedirs(OUT, exist_ok=True)
 rec0 = read_json(A.recognition)   # 识别结果（拆改前）
 sch = read_json(A.scheme) if A.scheme else scheme.from_recognition(rec0)
+if A.unit is not None:   # 按户出图：识别结果和方案裁成只剩这一户（unitview.subset），后面照整层出
+    # 这一户的门通向的别的房间：走道、前室是正常的；户内房间漏归户的话不会画在任何一户的图上
+    drawset.log("unit", A.unit, "doors lead to rooms not in the unit:", "、".join(unitview.outside_rooms(rec0, sch, A.unit)) or "-")
+    rec0, sch = unitview.subset(rec0, sch, A.unit)
 rec = sch.get("after") or rec0   # 有拆改时，出图和外包都用拆改后的几何
 
 # 版面：A3 图框可放图区域 336×275mm（drawset.AREA；下边留给视图图名，高按 250 算）；四周给尺寸和轴号的留边按每一侧实际要画的
@@ -116,11 +136,21 @@ def fits_mm(w_mm, h_mm, den, mx=M_EXT3 + M_EXT2, my=M_EXT3 + M_EXT2):
     return w_mm / den + mx + 2 * VIEW_PAD <= AVAIL_W and h_mm / den + my + 2 * VIEW_PAD <= AVAIL_H
 
 
+if A.unit is not None:   # 按户出图：A3 上 1:150 也放不下这一户时一行错、退出 1，不建输出目录（留边按最少的情况估：只有轴号）
+    _x = [p[0] for g in rec["footprint"] for p in g]
+    _y = [p[1] for g in rec["footprint"] for p in g]
+    _leg = LEGEND_MIN if any(it["key"] in symbols.load_pack(SYMBOLS) for it in sch.get("items", [])) else 0.0
+    if not fits_mm(max(_x) - min(_x) + _leg * 150, max(_y) - min(_y), 150, mx=2 * annotate.side_margin_mm(0, True), my=2 * annotate.side_margin_mm(0, True)):
+        printing.log("failed", f"unit too large: {A.unit} 外包 {(max(_x) - min(_x)) / 1000:.1f}×{(max(_y) - min(_y)) / 1000:.1f}m，"
+                               "A3 上 1:150 也放不下")
+        sys.exit(1)
+os.makedirs(OUT, exist_ok=True)
+
 # 方案没有分区、整层放不下 1:100（含三道尺寸）时自动分段（只沿 x 切）
 fp_x = [p[0] for g in rec["footprint"] for p in g]
 fp_y = [p[1] for g in rec["footprint"] for p in g]
 auto_split = False
-if SPLIT != "none" and not (sch.get("zones") or sch.get("cores")) and not fits_mm(max(fp_x) - min(fp_x), max(fp_y) - min(fp_y), 100):
+if SPLIT != "none" and A.unit is None and not (sch.get("zones") or sch.get("cores")) and not fits_mm(max(fp_x) - min(fp_x), max(fp_y) - min(fp_y), 100):
     depth = max(fp_y) - min(fp_y)
     seg_den = next((d for d in (100, 150) if fits_mm(1, depth, d)), 150)
     if not fits_mm(1, depth, seg_den):
@@ -128,8 +158,9 @@ if SPLIT != "none" and not (sch.get("zones") or sch.get("cores")) and not fits_m
     auto_split = bool(scheme.split_zones(rec, sch, lambda lk, rk: (AVAIL_W - est_margin(lk, "left") - est_margin(rk, "right") - 2 * VIEW_PAD) * seg_den))
     drawset.log("split", [(z["id"], z["kinds"], [round(v) for v in z["crop"]], z["wall_cut"]) for z in sch.get("zones", [])])
 zones = sch.get("zones") or sch.get("cores") or []
-TITLE_T = A.title or ("{storey}组合平面图" if zones else "{storey}{kind}" if A.mep else "{storey}平面图")
-TITLE = TITLE_T.format(storey=STOREY, kind="")
+TITLE_T = A.title or ("{unit} {kind}" if A.unit is not None and A.mep else "{unit} 平面图" if A.unit is not None
+                      else "{storey}组合平面图" if zones else "{storey}{kind}" if A.mep else "{storey}平面图")
+TITLE = TITLE_T.format(storey=STOREY, kind="", unit=A.unit or "")
 ZONE_TITLE = A.zone_title if A.zone_title is not None else ("{id} {kind}" if A.mep else "{storey} {id}平面图" if auto_split else "{id} 分区平面")
 if A.mep:   # 水电图一个平面出三张：自己写的图名里没有 {kind} 时空一格接在后面（"示例户型 插座布置图"），三张不同名
     TITLE_T = TITLE_T if "{kind}" in TITLE_T else TITLE_T + " {kind}"
@@ -213,14 +244,14 @@ def fit_scale(e, width_mm, height_mm=AVAIL_H, dens=DENS, margin=40.0):
     return next((d for d in dens if w / d + margin <= width_mm and h / d + margin <= height_mm), dens[-1])
 
 
-def pick_scale(plan, with_legend):
+def pick_scale(plan, with_legend, dens=DENS):
     """分区/分段图的比例：按每一侧实际的留边算，取放得下的最大比例；有图例栏时先把图例栏从 58 收窄到 44mm 再试，
     实在放不下才降比例。返回 (比例分母, 图例栏宽)。"""
     env, s = plan["env"], plan["sides"]
     w, h = (env[2] - env[0]) * 1000, (env[3] - env[1]) * 1000
     mx = s["left"]["margin"] + s["right"]["margin"] + 2 * VIEW_PAD
     my = s["bottom"]["margin"] + s["top"]["margin"] + 2 * VIEW_PAD
-    for d in DENS:
+    for d in dens:
         if h / d + my > AVAIL_H:
             continue
         room = AVAIL_W - (w / d + mx)
@@ -228,7 +259,7 @@ def pick_scale(plan, with_legend):
             return d, 0.0
         if with_legend and room >= LEGEND_MIN:
             return d, min(LEGEND_W, int(room * 2) / 2.0)
-    return DENS[-1], (LEGEND_W if with_legend else 0.0)
+    return dens[-1], (LEGEND_W if with_legend else 0.0)
 
 
 pad = lambda den, mm: mm * den / 1000.0
@@ -337,13 +368,18 @@ E = edge_of([p for g in rec["footprint"] for p in g])
 legend_w = {}
 if not blocks:
     plan_w = annotate.block_plan(f, (min(E[0], G[0]) - 0.01, min(E[1], G[1]) - 0.01, max(E[2], G[2]) + 0.01, max(E[3], G[3]) + 0.01))
-    whole_den, lw0 = pick_scale(plan_w, A.mep and bool(legend))   # 水电图整层一张时图例也在右侧一栏
-    if A.mep:
+    # 水电图、按户出图整层一张时图例也在右侧一栏；按户出图（--unit）的比例档细一些（unitview.DENS）
+    whole_den, lw0 = pick_scale(plan_w, (A.mep or A.unit is not None) and bool(legend), unitview.DENS if A.unit is not None else DENS)
+    if A.unit is not None and whole_den > 150:   # 按实际留边放不下 1:150：同样报错（输出目录里只有 model.ifc 和 work/，没有图）
+        e_ = plan_w["env"]
+        printing.log("failed", f"unit too large: {A.unit} 外包 {e_[2] - e_[0]:.1f}×{e_[3] - e_[1]:.1f}m，A3 上 1:150 也放不下")
+        sys.exit(1)
+    if A.mep or A.unit is not None:
         legend_w["*"] = lw0
 if not blocks and whole_den <= 150:
-    # 没有分区、整层放得下大比例：总图就是详图（编号、标高、三道尺寸都在这张上）
-    wholes = detail_views([dict({"name": TITLE_T.format(storey=STOREY, kind=kind), "den": whole_den, "plan": plan_w, "crop": False},
-                                **kind_spec(kind, EXCL + ' + IfcWall, Pset_WallCommon.Status="DEMOLISH"')) for kind in KINDS])
+    # 没有分区、整层放得下大比例：总图就是详图（编号、标高、三道尺寸都在这张上）；拆除的墙照画（图例带"拆除"），不像 1:200 总图那样排除
+    wholes = detail_views([dict({"name": TITLE_T.format(storey=STOREY, kind=kind, unit=A.unit or ""), "den": whole_den, "plan": plan_w, "crop": False},
+                                **kind_spec(kind, EXCL)) for kind in KINDS])
     whole, den = wholes[0], whole_den
 else:
     den = fit_scale(E, AVAIL_W)
@@ -375,7 +411,7 @@ else:
             labs.append(((lo + hi) / 2, ids[0] if len(ids) == 1 else f"{ids[0]}～{ids[-1]}", k["id"]))
         drawset.log("zone key", annotate.zone_key(whole, den, E, cuts, labs, z=Z))
 if not blocks and whole_den <= 150:
-    views += [(f"{PREFIX}-{i:02d}", w, den, "*" if A.mep else None) for i, w in enumerate(wholes, 1)]
+    views += [(f"{PREFIX}-{i:02d}", w, den, "*" if A.mep or A.unit is not None else None) for i, w in enumerate(wholes, 1)]
 else:
     views.append((f"{PREFIX}-01", whole, den, None))
 

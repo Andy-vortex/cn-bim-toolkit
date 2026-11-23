@@ -335,7 +335,7 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
             fire = markcode.fire_rating(lab)   # 防火门类代号 FM/FD/FH → 甲/乙/丙级（没写等级为"待定"）
             _pset(f, e, "Pset_DoorCommon", dict({"IsExternal": bool(o["exterior"])}, **({"FireRating": fire} if fire else {})))
             _pset(f, e, "JZ_Opening", dict({"Kind": "门", "Rooms": rooms, "Source": o["block"], "ClearWidthEst_mm": w - 100.0,
-                                            "HeightSource": hsrc}, **jz_lab))
+                                            "HeightSource": hsrc}, **jz_lab, **({"Entrance": True} if o.get("entrance") else {})))
             zone(e, o["x"])
             n_door += 1
         else:
