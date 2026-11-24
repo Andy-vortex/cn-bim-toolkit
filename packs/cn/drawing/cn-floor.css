@@ -1,0 +1,6 @@
+/* 地面铺装图（make_plan_set --kinds floor）追加的样式：砖缝细线，门槛石浅灰填充，压条一道粗线，起铺点记号，找坡箭头 */
+.jz-joint { stroke: #000; stroke-width: 0.1; fill: none; }
+.jz-threshold { fill: #d9d9d9; stroke: #000; stroke-width: 0.18; }
+.jz-floorstrip { stroke: #000; stroke-width: 0.35; fill: none; }
+.jz-floorstart { stroke: #000; stroke-width: 0.25; fill: none; }
+.jz-fall { stroke: #000; stroke-width: 0.18; fill: none; }

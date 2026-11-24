@@ -1,0 +1,5 @@
+/* 灯具定位图（make_plan_set --kinds ceiling 的第二张）接在 cn-ceiling.css 后面：吊顶造型线淡显，灯和定位尺寸是主角 */
+.IfcCovering, .IfcCovering path { stroke: #9a9a9a; stroke-width: 0.13; }
+/* 主灯、单独一盏筒灯的定位尺寸穿过筒灯符号时，线在符号处断开：DIMENSION 只留起止符，线另画几截 */
+.jz-dimgap { stroke-opacity: 0; }
+.jz-dimline { stroke-width: 0.13; }

@@ -1,0 +1,51 @@
+{
+ "_说明": "地面规则，见同目录 README。sources：依据（条文号或\"惯例\"\"推断\"、自拟概括、参数、可信度 A/B/C/—、状态；条文和网页都待原文核对）。materials：材料（name 图上和表里写的名字，kind tile 地砖 / wood 木地板 / stone 门槛石，size 规格 [长, 宽]，joint 缝宽，stagger 木地板逐排错开板长的 1/n，waste 损耗率，category 建模时的材质类别）。rooms：房间类型（../furniture/room_types.json）→ 缺省材料，wet 是湿区（完成面低 levels.wet_drop、门口放门槛石），need_drain 是应该有地漏（没有时报告里记一条提醒）。layout：排砖（见 README）。threshold：哪些门口放门槛石。levels：湿区降板、找坡。model：建模时面层的顶面和厚度。checks：校验门槛。长度都是毫米。",
+ "sources": {
+  "C1": {"ref": "惯例", "summary": "客厅、餐厅、玄关、过道常铺 800×800 地砖，缝宽约 2mm", "params": {"size": [800, 800], "joint": 2}, "level": "C", "status": "惯例"},
+  "C2": {"ref": "惯例", "summary": "卧室、书房常铺木地板（如 1220×195 强化或复合地板），逐排错开约三分之一板长", "params": {"size": [1220, 195], "stagger": 3}, "level": "C", "status": "惯例"},
+  "C3": {"ref": "惯例", "summary": "厨房铺 600×600 防滑地砖，缝宽约 2mm", "params": {"size": [600, 600], "joint": 2}, "level": "C", "status": "惯例"},
+  "C4": {"ref": "惯例", "summary": "卫生间、阳台铺 300×300 防滑地砖，缝宽约 2mm", "params": {"size": [300, 300], "joint": 2}, "level": "C", "status": "惯例"},
+  "C5": {"ref": "惯例", "summary": "地砖、木地板的损耗率常按 5% 计", "params": {"tile": 0.05, "wood": 0.05}, "level": "C", "status": "惯例"},
+  "C6": {"ref": "惯例", "summary": "卫生间、厨房、阳台这些湿区的完成面比主地面低约 20mm，防水外溢", "params": {"wet_drop": 20}, "level": "C", "status": "惯例"},
+  "C7": {"ref": "惯例", "summary": "湿区门口、两侧材料不同的门口和入户门放门槛石（过门石），长同门洞宽、宽同墙厚；两侧材料相同的干区门口用压条收口", "params": {}, "level": "C", "status": "惯例"},
+  "C8": {"ref": "惯例", "summary": "地砖从房间中线对称排：边砖对称、不小于半块，非整砖放在墙边", "params": {"min_edge": 0.5}, "level": "C", "status": "惯例"},
+  "C9": {"ref": "推断", "summary": "不规则房间（L 形另一肢）里小于三分之一块的边砖不好铺，要提醒；地漏落在一块砖正中，四边找坡", "params": {"warn_edge": 0.3333}, "level": "—", "status": "推断"},
+  "C10": {"ref": "惯例", "summary": "湿区地面坡向地漏，坡度约 1%", "params": {"fall": 0.01}, "level": "C", "status": "惯例"},
+  "C11": {"ref": "推断", "summary": "铺装面层建模在楼面以下 1mm、厚 10mm，上面没有楼板（出图时面层在门扇、家具二维符号之下）", "params": {"top": -1, "thickness": 10}, "level": "—", "status": "推断（实测）"},
+  "C12": {"ref": "推断", "summary": "铺装方向顺着房间里多数墙：各边按方向（对 90° 取模）累加边长，取总长最大的那组里最长那条边的方向；一面斜墙再长也顺着另外几面正交墙铺，正交墙边不切斜砖。方向差不到 dir_tol 度的边算同一组", "params": {"dir_tol": 0.5}, "level": "—", "status": "推断"}
+ },
+ "materials": {
+  "tile800": {"name": "地砖", "kind": "tile", "size": [800, 800], "joint": 2, "waste": 0.05, "category": "tile", "src": ["C1", "C5"]},
+  "wood": {"name": "木地板", "kind": "wood", "size": [1220, 195], "joint": 0, "stagger": 3, "waste": 0.05, "category": "wood", "src": ["C2", "C5"]},
+  "tile600": {"name": "地砖", "kind": "tile", "size": [600, 600], "joint": 2, "waste": 0.05, "category": "tile", "src": ["C3", "C5"]},
+  "tile600_anti": {"name": "防滑地砖", "kind": "tile", "size": [600, 600], "joint": 2, "waste": 0.05, "category": "tile", "src": ["C3", "C5"]},
+  "tile300_anti": {"name": "防滑地砖", "kind": "tile", "size": [300, 300], "joint": 2, "waste": 0.05, "category": "tile", "src": ["C4", "C5"]},
+  "threshold": {"name": "门槛石", "kind": "stone", "category": "stone", "src": ["C7"]}
+ },
+ "rooms": {
+  "living": {"material": "tile800"},
+  "dining": {"material": "tile800"},
+  "entry": {"material": "tile800"},
+  "corridor": {"material": "tile800"},
+  "master_bedroom": {"material": "wood"},
+  "bedroom": {"material": "wood"},
+  "study": {"material": "wood"},
+  "kitchen": {"material": "tile600_anti", "wet": true},
+  "bathroom": {"material": "tile300_anti", "wet": true, "need_drain": true},
+  "balcony": {"material": "tile300_anti", "wet": true, "need_drain": true},
+  "storage": {"material": "tile800"},
+  "other": {"material": "tile800"}
+ },
+ "layout": {
+  "min_edge": 0.5,
+  "warn_edge": 0.3333,
+  "drain_min_edge": 0.3333,
+  "merge_kinds": ["opening"],
+  "dir_tol": 0.5,
+  "src": ["C8", "C9", "C12"]
+ },
+ "threshold": {"wet": true, "material_change": true, "entrance": true, "src": ["C7"]},
+ "levels": {"wet_drop": 20, "fall": 0.01, "src": ["C6", "C10"]},
+ "model": {"top": -1, "thickness": 10, "src": ["C11"]},
+ "checks": {"area_tol_mm2": 100}
+}

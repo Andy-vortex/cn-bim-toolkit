@@ -30,13 +30,22 @@
   "C17": {"ref": "惯例", "summary": "空调插座回路：柜机每台一路，挂机两台一路", "params": {}, "level": "C", "status": "惯例"},
   "C18": {"ref": "推断", "summary": "局部等电位端子箱的高度没查到，暂按一般插座 0.3m 放", "params": {"z": 300}, "level": "—", "status": "推断"},
   "C19": {"ref": "推断", "summary": "卫生间插座高度没查到，沿用符号库防溅插座的缺省高度 1.5m", "params": {"z": 1500}, "level": "—", "status": "推断"},
-  "C20": {"ref": "惯例", "summary": "台盆、厨房水槽的排水口在台盆、水槽正下方的柜内，离墙 0.1～0.2m", "params": {"from_wall": [100, 200]}, "level": "C", "status": "惯例"}
+  "C20": {"ref": "惯例", "summary": "台盆、厨房水槽的排水口在台盆、水槽正下方的柜内，离墙 0.1～0.2m", "params": {"from_wall": [100, 200]}, "level": "C", "status": "惯例"},
+  "S11": {"ref": "GB 50034-2013 第 7.2 节（条文号未查到）", "summary": "每一照明单相分支回路电流不宜超过 16A，所接光源数或 LED 灯具数不宜超过 25 个", "params": {"max_per_circuit": 25}, "level": "B", "status": "待原文核对"},
+  "C21": {"ref": "惯例", "summary": "筒灯沿吊顶边带的中线均布，间距 1.0～1.5m，离墙、离转角留出一段", "params": {"spacing": [1000, 1500]}, "level": "C", "status": "惯例"},
+  "C22": {"ref": "推断", "summary": "回字形灯槽里暗藏灯带，沿灯槽走一圈，按米计", "params": {}, "level": "—", "status": "推断"},
+  "C23": {"ref": "推断", "summary": "一间房的灯分组控制（主灯、筒灯、灯带各一组），同一个门口的各组合在一块多联面板上（有双控的组时用多联双控面板）；86 型面板常见到三联，多了挨着再加一个面板", "params": {"panel_max": 3}, "level": "—", "status": "推断"},
+  "C24": {"ref": "惯例", "summary": "筒灯之间中心距不小于 0.8m：一段放不下两盏的只放一盏在正中，窄过道里两排挨得太近的只放一排在中线上；一排里的间距取整到 10mm，余数分给两头", "params": {"spacing_min": 800, "round": 10}, "level": "C", "status": "惯例"},
+  "C25": {"ref": "推断", "summary": "灯具定位图上，同一直线上相邻两盏筒灯相距超过最大间距的 1.5 倍就不算一排，分开标注，各自量到最近的那面墙", "params": {"row_break": 1.5}, "level": "—", "status": "推断"},
+  "C26": {"ref": "推断", "summary": "一排筒灯两头到墙只差一点（不到 0.1m）时取对称；同一圈里相对的两排可布灯长度相差不到一个间距时两排灯位对齐（取短的那排的排法），现场按房间对称排，差一点看着像画错", "params": {"end_sym_max": 100, "align_within": 1.0}, "level": "—", "status": "推断"}
  },
  "points": {
   "light":          {"name": "主灯", "symbol": "cn_light_ceiling", "kind": "light", "circuit": "WL"},
   "light_over":     {"name": "灯", "symbol": "cn_light_ceiling", "kind": "light", "circuit": "WL"},
+  "downlight":      {"name": "筒灯", "symbol": "cn_downlight", "kind": "light", "circuit": "WL", "src": ["C21", "C24", "C25", "C26"]},
+  "strip":          {"name": "灯带", "symbol": "cn_light_strip", "kind": "light", "circuit": "WL", "src": ["C22"]},
   "switch":         {"name": "开关", "symbol": {"1": "cn_switch_1", "2": "cn_switch_2", "3": "cn_switch_3"}, "kind": "switch", "z": 1300, "circuit": "WL", "src": ["S10"]},
-  "switch_2way":    {"name": "双控开关", "symbol": "cn_switch_2way", "kind": "switch", "z": 1300, "circuit": "WL", "src": ["S10"]},
+  "switch_2way":    {"name": "双控开关", "symbol": {"1": "cn_switch_2way", "2": "cn_switch_2way_2", "3": "cn_switch_2way_3"}, "kind": "switch", "z": 1300, "circuit": "WL", "src": ["S10"]},
   "switch_bed":     {"name": "床头双控开关", "symbol": "cn_switch_2way", "kind": "bed_switch", "z": 700, "circuit": "WL", "src": ["C1"]},
   "socket":         {"name": "五孔插座", "symbol": "cn_socket", "kind": "socket", "z": 300, "circuit": "WX", "src": ["S7"]},
   "socket_counter": {"name": "台面插座", "symbol": "cn_socket_splash", "kind": "socket", "z": 1100, "circuit": "WC", "src": ["C2"]},
@@ -57,7 +66,7 @@
   "floor_drain":    {"name": "地漏", "symbol": "cn_floor_drain", "kind": "floor_drain", "z": 0, "src": ["C14"]}
  },
  "circuits": {
-  "WL": {"name": "照明", "system": "LIGHTING", "src": ["S3"]},
+  "WL": {"name": "照明", "system": "LIGHTING", "max": 25, "weight": {"switch": 0, "switch_2way": 0, "switch_bed": 0}, "src": ["S3", "S11"]},
   "WX": {"name": "普通插座", "system": "ELECTRICAL", "rcd": true, "max": 10, "src": ["S3", "S1", "S8"]},
   "WC": {"name": "厨房插座", "system": "ELECTRICAL", "rcd": true, "max": 10, "src": ["S3", "S1", "S8"]},
   "WW": {"name": "卫生间插座", "system": "ELECTRICAL", "rcd": true, "max": 10, "src": ["S1", "S8"]},
@@ -86,7 +95,9 @@
    {"point": "light", "ceiling": "center"},
    {"point": "light_over", "above": "coffee_table"},
    {"point": "light_over", "above": "dining_table"},
-   {"point": "switch", "door": "room", "gap": 150, "controls": "lights", "src": ["S9"]},
+   {"point": "downlight", "ceiling": "ring", "src": ["C21"]},
+   {"point": "strip", "ceiling": "slot", "src": ["C22"]},
+   {"point": "switch", "door": "room", "gap": 150, "controls": "lights", "src": ["S9", "C23"]},
    {"point": "panel", "door": "entrance", "gap": 500},
    {"point": "infobox", "door": "entrance", "gap": 1000},
    {"point": "socket", "beside": "sofa", "side": "both", "gap": 150},
@@ -100,11 +111,15 @@
   "dining": {"rules": [
    {"point": "light", "ceiling": "center"},
    {"point": "light_over", "above": "dining_table"},
-   {"point": "switch", "door": "room", "gap": 150, "controls": "lights", "src": ["S9"]},
+   {"point": "downlight", "ceiling": "ring", "src": ["C21"]},
+   {"point": "strip", "ceiling": "slot", "src": ["C22"]},
+   {"point": "switch", "door": "room", "gap": 150, "controls": "lights", "src": ["S9", "C23"]},
    {"point": "socket", "wall": "free"}
   ]},
   "master_bedroom": {"min": {"socket": 2}, "src": ["S5"], "rules": [
    {"point": "light", "ceiling": "center"},
+   {"point": "downlight", "ceiling": "ring", "src": ["C21"]},
+   {"point": "strip", "ceiling": "slot", "src": ["C22"]},
    {"point": "switch_2way", "door": "room", "gap": 150, "controls": "main", "if": "bed", "src": ["S9"]},
    {"point": "switch", "door": "room", "gap": 150, "controls": "lights", "if": "!bed", "src": ["S9"]},
    {"point": "switch_bed", "beside": "bed", "side": "left", "gap": 150, "controls": "main", "src": ["C1"]},
@@ -117,6 +132,8 @@
   "bedroom": {"like": "master_bedroom"},
   "study": {"min": {"socket": 2}, "src": ["S5"], "rules": [
    {"point": "light", "ceiling": "center"},
+   {"point": "downlight", "ceiling": "ring", "src": ["C21"]},
+   {"point": "strip", "ceiling": "slot", "src": ["C22"]},
    {"point": "switch", "door": "room", "gap": 150, "controls": "lights", "src": ["S9"]},
    {"point": "socket", "beside": "desk", "side": "both", "gap": 150},
    {"point": "data", "beside": "desk", "side": "right", "gap": 450},
@@ -164,16 +181,22 @@
   ]},
   "entry": {"rules": [
    {"point": "light", "ceiling": "center"},
+   {"point": "downlight", "ceiling": "axis", "src": ["C21"]},
    {"point": "switch", "door": "room", "gap": 150, "controls": "lights", "src": ["S9"]},
    {"point": "panel", "door": "entrance", "gap": 500},
    {"point": "infobox", "wall": "free"}
   ]},
   "storage": {"rules": [
    {"point": "light", "ceiling": "center"},
+   {"point": "downlight", "ceiling": "axis", "src": ["C21"]},
    {"point": "switch", "door": "room", "gap": 150, "controls": "lights", "src": ["S9"]}
   ]},
   "corridor": {"like": "storage"}
  },
  "checks": {"tolerance_mm2": 100, "block_gap": 100, "switch_reach": 600, "shower_clear": 600, "shower_clear_src": "C16", "light_gap": 1000,
-            "switch_gap_max": 200, "switch_gap_src": "S9"}
+            "switch_gap_max": 200, "switch_gap_src": "S9",
+            "ceiling_lights": {"spacing_max": 1500, "end_min": 400, "min_run": 1000, "wall_min": 150, "curtain_clear": 150, "radius": 45,
+                               "light_clear": 600, "panel_max": 3, "panel_step": 100,
+                               "spacing_min": 800, "spacing_round": 10, "row_break": 1.5, "end_sym_max": 100, "align_within": 1.0,
+                               "src": ["C21", "C23", "C24", "C25", "C26"]}}
 }

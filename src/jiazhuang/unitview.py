@@ -33,20 +33,22 @@ def _rings(g) -> list:
     return [[[round(x, 1), round(y, 1)] for x, y in p.exterior.coords] for p in parts if not p.is_empty and p.area > 1.0]
 
 
-def _entrance(o: dict, ids: set, by: dict) -> bool:
+def _entrance(o: dict, ids: set, by: dict, usage: dict) -> bool:
     """入户门：一侧是这一户的房间、另一侧是不属于任何户的公共交通空间（openings.is_entrance_door 的第 ③ 条，两侧房名都不含
-    排除词）。按户出图时公共那一侧不在模型里，IFC 里认不出来，所以裁的时候先认好，记在门上（entrance）。"""
+    排除词；房名用方案里的用途 usage，和整层建模时 IfcSpace 的名字一致）。按户出图时公共那一侧不在模型里，IFC 里认不出来，
+    所以裁的时候先认好，记在门上（entrance）。"""
     has = lambda s, words: any(w in s for w in words)
     rs = [by[x] for x in o.get("rooms") or [] if x in by]
-    if o.get("kind") != "door" or len(rs) != 2 or any(has(r.get("name") or "", _ENT["exclude_words"]) for r in rs):
+    name = lambda r: usage.get(r["id"]) or r.get("name") or ""
+    if o.get("kind") != "door" or len(rs) != 2 or any(has(name(r), _ENT["exclude_words"]) for r in rs):
         return False
-    public = lambda r: bool(r.get("public")) or has(r.get("name") or "", _ENT["public_room_words"])
+    public = lambda r: bool(r.get("public")) or has(name(r), _ENT["public_room_words"])
     mine = [r for r in rs if r["id"] in ids]
     other = [r for r in rs if r["id"] not in ids]
     return len(mine) == 1 and len(other) == 1 and not public(mine[0]) and not other[0].get("unit") and public(other[0])
 
 
-def _part(rec: dict, ids: set) -> tuple[dict, set]:
+def _part(rec: dict, ids: set, usage: dict | None = None) -> tuple[dict, set]:
     """识别结果里只留房间 ids 和围着它们的墙、开向它们的门窗、穿过它们的轴线；外轮廓按留下的房间和墙重算。
     返回 (裁过的识别结果, 留下的墙、门窗的原 id)。"""
     rooms = [r for r in rec["rooms"] if r["id"] in ids]
@@ -63,7 +65,7 @@ def _part(rec: dict, ids: set) -> tuple[dict, set]:
             walls.append(dict(w, id=w["id"] if len(rings) == 1 else f"{w['id']}-{i + 1}", polygon=ring))
         kept |= {w["id"]} if rings else set()
     by = {r["id"]: r for r in rec["rooms"]}
-    openings = [dict(o, entrance=True) if _entrance(o, ids, by) else o for o in rec["openings"] if ids & set(o.get("rooms") or [])]
+    openings = [dict(o, entrance=True) if _entrance(o, ids, by, usage or {}) else o for o in rec["openings"] if ids & set(o.get("rooms") or [])]
     kept |= {o["id"] for o in openings}
     x0, y0, x1, y1 = unary_union([U] + [_poly(w["polygon"]) for w in walls]).bounds
     axes = rec.get("axes") or {}
@@ -95,14 +97,22 @@ def subset(rec: dict, sch: dict, unit: str) -> tuple[dict, dict]:
         raise ValueError(unit)
     geo = sch.get("after") or rec
     ids = {r["id"] for r in geo["rooms"] if r.get("unit") == unit}
-    new_geo, kept = _part(geo, ids)
+    usage = {r["id"]: r.get("usage") for r in sch.get("rooms", []) if r.get("usage")}
+    new_geo, kept = _part(geo, ids, usage)
     out = dict(sch, zones=[], rooms=[r for r in sch["rooms"] if r["id"] in ids], items=[it for it in sch.get("items", []) if it.get("room") in ids])
     if "cores" in out:
         out["cores"] = []
+    if "ceilings" in sch:   # 吊顶块只留这一户的
+        out["ceilings"] = [c for c in sch["ceilings"] if c.get("room") in ids]
+    if "flooring" in sch:   # 铺装区只留这一户的；门槛石、压条只留门还在的
+        fl, doors = sch["flooring"], {o["id"] for o in new_geo["openings"]}
+        out["flooring"] = dict(fl, zones=[z for z in fl.get("zones", []) if set(z["rooms"]) <= ids],
+                               thresholds=[t for t in fl.get("thresholds", []) if t["door"] in doors and set(t["rooms"]) & ids],
+                               strips=[s for s in fl.get("strips", []) if s["door"] in doors and set(s["rooms"]) & ids])
     kept |= ids
     if sch.get("after"):
         out["after"] = new_geo
-        rec, kept0 = _part(rec, {r["id"] for r in rec["rooms"] if r["id"] in ids} or ids)
+        rec, kept0 = _part(rec, {r["id"] for r in rec["rooms"] if r["id"] in ids} or ids, usage)
         kept |= kept0
     else:
         rec = new_geo

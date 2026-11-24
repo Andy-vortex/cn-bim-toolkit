@@ -78,6 +78,16 @@ def _prism(f, ctx, ring, z0, h):
     return f.createIfcShapeRepresentation(ctx, "Body", "SweptSolid", [solid])
 
 
+def _prism_voids(f, ctx, ring, holes, z0, h):
+    """带洞的拉伸实体（吊顶的外圈、边吊一圈）：外轮廓 + 洞，毫米。"""
+    poly = lambda r: f.createIfcPolyline([f.createIfcCartesianPoint((float(x), float(y))) for x, y in list(r) + [r[0]]])
+    prof = f.createIfcArbitraryProfileDefWithVoids("AREA", None, poly(ring), [poly(hh) for hh in holes]) if holes \
+        else f.createIfcArbitraryClosedProfileDef("AREA", None, poly(ring))
+    pos = f.createIfcAxis2Placement3D(f.createIfcCartesianPoint((0.0, 0.0, float(z0))), None, None)
+    solid = f.createIfcExtrudedAreaSolid(prof, pos, f.createIfcDirection((0.0, 0.0, 1.0)), float(h))
+    return f.createIfcShapeRepresentation(ctx, "Body", "SweptSolid", [solid])
+
+
 def _curve2d(f, ctx, rings):
     curves = [f.createIfcPolyline([f.createIfcCartesianPoint((float(x), float(y))) for x, y in list(r) + [r[0]]]) for r in rings]
     return f.createIfcShapeRepresentation(ctx, ctx.ContextIdentifier, "Curve2D", curves)
@@ -273,6 +283,9 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
             props["BedCount"] = int(u["beds"])
         if u.get("care_type"):
             props["CareType"] = u["care_type"]
+        if sch.get("ceilings"):   # 有吊顶时记原顶净高（方案 rooms[].height，没写用吊顶规则表的缺省），顶面图写"原顶刷白"的标高
+            from . import ceiling
+            props["CeilingHeight_mm"] = float(u.get("height") or ceiling.CHECKS["height"])
         _pset(f, sp, "JZ_Space", props)
         zone(sp, lx if auto else sum(q[0] for q in ring) / len(ring) + OX)   # 自动分段：房间按标注点归段（只在这一段写房名）
         q = api.pset.add_qto(f, product=sp, name="Qto_SpaceBaseQuantities")
@@ -372,7 +385,7 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
 
     # 床和设施：约定包符号的类型；家具（furniture.json 的键）见 place_item
     pack = sym.load_pack(pack_symbols)
-    types = sym.create_types(f, pack)
+    types = sym.create_types(f, pack, used={it["key"] for it in sch["items"]})
     furn = {}
     placed = []
     for it in sch["items"]:
@@ -383,14 +396,94 @@ def build(rec: dict, sch: dict, pack_symbols: str, out_path: str, project_name: 
             occ = sym.place_occurrence(f, types, it["key"], it["name"], it["x"] - OX, it["y"] - OY, z0 + it["z"], it["rot"], container=where)
             if it.get("plan_id"):   # 布点器的点位：plan_id 写进 Tag，回路、控制关系和方案对得上
                 occ.Tag = it["plan_id"]
+            if it.get("path"):   # 灯带：沿灯槽的路径（相对自己的放置点，毫米）和长度
+                _pset(f, occ, "JZ_LightStrip", {"Path": json.dumps([[round(x - it["x"], 1), round(y - it["y"], 1)] for x, y in it["path"]]),
+                                                "Length_mm": float(it["length"])})
             placed.append((it, occ))
         zone(occ, it["x"])
     links = _mep_links(f, placed, {r["id"]: r.get("unit") or "" for r in rec["rooms"]}, pack)
+    # 吊顶（ceiling.py 生成的块）：每块一个 IfcCovering（CEILING），从吊顶底往上 THICK 厚，材质按材料，模板和参数记进 JZ_Ceiling
+    if sch.get("ceilings"):
+        from . import ceiling
+        cmats = {}
+        for b in sch["ceilings"]:
+            m = ceiling.MATERIALS[b["material"]]
+            e = api.root.create_entity(f, ifc_class="IfcCovering", name=f"{use[b['room']]['usage']} {b['part']}", predefined_type="CEILING")
+            e.Tag = b["id"]
+            rep = _prism_voids(f, body, _ring(b["polygon"], OX, OY), [_ring(hh, OX, OY) for hh in b.get("holes") or []], 0,
+                               ceiling.CHECKS["thickness"])
+            api.geometry.assign_representation(f, product=e, representation=rep)
+            api.geometry.edit_object_placement(f, product=e, matrix=_matrix(0, 0, z0 + b["bottom"], 0))
+            if m["css"] not in cmats:
+                cmats[m["css"]] = api.material.add_material(f, name=m["css"])
+            api.material.assign_material(f, products=[e], material=cmats[m["css"]])
+            contain(e)
+            _pset(f, e, "JZ_Ceiling", dict({"Room": b["room"], "Template": b["template"], "Part": b["part"], "Material": m["name"],
+                                            "Bottom_mm": float(b["bottom"])},
+                                           **({"Width_mm": float(b["width"])} if b.get("width") else {}),
+                                           **({"Slot_mm": float(b["slot"])} if b.get("slot") else {})))
+    n_floor = _flooring(f, body, sch, use, z0, OX, OY, contain) if sch.get("flooring") else 0
 
     f.write(out_path)
     return {"ifc": out_path, "offset": (OX, OY), "z0": z0, "walls": n_wall, "spaces": len(spaces), "doors": n_door,
             "windows": n_win, "items": len(sch["items"]), "axes": (len(axes["x"]), len(axes["y"])),
-            "extents_m": ((min(xs) - OX) / 1000, (min(ys) - OY) / 1000, (max(xs) - OX) / 1000, (max(ys) - OY) / 1000), **links}
+            "extents_m": ((min(xs) - OX) / 1000, (min(ys) - OY) / 1000, (max(xs) - OX) / 1000, (max(ys) - OY) / 1000), **links,
+            **({"flooring": n_floor} if sch.get("flooring") else {})}
+
+
+def _flooring(f, body, sch, use, z0, OX, OY, contain) -> int:
+    """地面（flooring.py 生成的铺装区、门槛石）：每块一个 IfcCovering（FLOORING），顶面在楼面 + 区的标高（湿区降板）+ model.top，
+    厚 model.thickness（面层在门扇、家具二维符号之下、上面没有楼板）；材质按材料（"地砖 800×800"、"门槛石"），排砖参数（规格、缝宽、
+    方向、网格原点、错缝、起铺点、数量）记进 JZ_Flooring（坐标减过偏移，和 IFC 里的几何同一坐标系）。砖缝不建模：出图时
+    flooring.joint_lines 按这些参数算。返回建了几块。"""
+    from . import flooring as fl_
+    fl = sch["flooring"]
+    top, th = float(fl_.MODEL["top"]), float(fl_.MODEL["thickness"])
+    mats = {}
+
+    def mat(name, cat):
+        if name not in mats:
+            mats[name] = api.material.add_material(f, name=name, category=cat)
+        return mats[name]
+    strips = {}
+    for s in fl.get("strips", []):
+        for r in s["rooms"]:
+            strips.setdefault(r, []).append(s["door"])
+    n = 0
+    xy = lambda p: f"{p[0] - OX:.1f},{p[1] - OY:.1f}"
+    for z in fl.get("zones", []):
+        m = fl_.material_of(z)
+        q = z["quantity"]
+        e = api.root.create_entity(f, ifc_class="IfcCovering", name=f"{use[z['rooms'][0]]['usage']} 地面", predefined_type="FLOORING")
+        e.Tag = z["id"]
+        rep = _prism_voids(f, body, _ring(z["polygon"], OX, OY), [_ring(h, OX, OY) for h in z.get("holes") or []], 0, th)
+        api.geometry.assign_representation(f, product=e, representation=rep)
+        api.geometry.edit_object_placement(f, product=e, matrix=_matrix(0, 0, z0 + float(z["level"]) + top - th, 0))
+        api.material.assign_material(f, products=[e], material=mat(fl_.label(m), m.get("category", m["kind"])))
+        contain(e)
+        doors = sorted({d for r in z["rooms"] for d in strips.get(r, [])})
+        _pset(f, e, "JZ_Flooring", {"Part": "铺装区", "Code": z["code"], "Material": m["name"], "Kind": m["kind"],
+                                    "Size": f"{m['size'][0]:g}×{m['size'][1]:g}", "Joint_mm": float(m["joint"]), "Direction_deg": float(z["dir"]),
+                                    "Origin": xy(z["origin"]), "Pitch": f"{z['pitch'][0]:g},{z['pitch'][1]:g}", "Stagger": int(z.get("stagger") or 0),
+                                    "Start": xy(z["start"]), "StartKind": z["start_kind"], "Rooms": ",".join(z["rooms"]),
+                                    "Level_mm": float(z["level"]), "Wet": bool(z["wet"]), "Area_m2": float(q["area_m2"]), "Whole": int(q["whole"]),
+                                    "Cut": int(q["cut"]), "Waste": float(q["waste"]), "Total": float(q["total"]), "TotalUnit": q["unit"],
+                                    "Edges": json.dumps(z["edges"], ensure_ascii=False), "Strips": ",".join(doors),
+                                    "Notes": "；".join(z.get("notes") or [])})
+        n += 1
+    stone = fl_.MATERIALS[fl_.STONE]
+    for t in fl.get("thresholds", []):
+        e = api.root.create_entity(f, ifc_class="IfcCovering", name=f"门槛石 {t['door']}", predefined_type="FLOORING")
+        e.Tag = t["id"]
+        api.geometry.assign_representation(f, product=e, representation=_prism(f, body, _ring(t["polygon"], OX, OY), 0, th))
+        api.geometry.edit_object_placement(f, product=e, matrix=_matrix(0, 0, z0 + top - th, 0))
+        api.material.assign_material(f, products=[e], material=mat(stone["name"], stone.get("category", "stone")))
+        contain(e)
+        _pset(f, e, "JZ_Flooring", {"Part": "门槛石", "Code": t["code"], "Material": stone["name"], "Kind": stone["kind"],
+                                    "Door": t["door"], "Rooms": ",".join(t["rooms"]), "Width_mm": float(t["width"]), "Depth_mm": float(t["depth"]),
+                                    "Size": f"{t['width']:g}×{t['depth']:g}", "Reason": t["reason"]})
+        n += 1
+    return n
 
 
 def _mep_links(f, placed, unit_of: dict, pack: dict) -> dict:
@@ -419,7 +512,7 @@ def _mep_links(f, placed, unit_of: dict, pack: dict) -> dict:
     lights = {it["plan_id"]: occ for it, occ in placed if it.get("plan_id")}
     n = 0
     for it, occ in placed:
-        for lid in it.get("controls") or []:
+        for lid in (it.get("controls") or []) + ([it["next"]] if it.get("next") else []):   # next：同一组的灯连成一串
             if lid not in lights:
                 log("controls: no light", it.get("plan_id"), lid)
                 continue

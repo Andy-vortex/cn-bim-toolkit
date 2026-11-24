@@ -1,0 +1,4 @@
+{"rooms": [
+ {"room": "玄关", "start": "corner"},
+ {"room": "卫生间", "size": [300, 600]}
+]}

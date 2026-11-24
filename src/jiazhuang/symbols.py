@@ -183,11 +183,14 @@ def _symbol_rep(f, ctx, spec):
     return f.createIfcShapeRepresentation(ctx, ctx.ContextIdentifier, "Curve2D", curves)
 
 
-def create_types(f, pack: dict) -> dict[str, ifcopenshell.entity_instance]:
-    """为符号库里每一项建一个 IFC 类型；返回 {符号键: 类型实体}。"""
+def create_types(f, pack: dict, used=()) -> dict[str, ifcopenshell.entity_instance]:
+    """为符号库里每一项建一个 IFC 类型；返回 {符号键: 类型实体}。没有图上符号（views 为空，如灯带）的、写了 on_demand 的
+    （多联双控开关：只在有吊顶、门口合成多联面板时用到）只在 used 里有时才建，没用到它们的 IFC 里没有这些类型。"""
     body = get_or_add_context(f, "Model", "Body", "MODEL_VIEW")
     types = {}
     for key, spec in pack.items():
+        if (spec.get("views") == [] or spec.get("on_demand")) and key not in used:
+            continue
         t = api.root.create_entity(f, ifc_class=spec["ifc_type"], name=spec["name"], predefined_type=spec["predefined"])
         t.Description = spec.get("legend")
         t.Tag = key

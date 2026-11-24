@@ -130,6 +130,52 @@ def mep_stylesheet() -> str:
     return MEP_STYLESHEET
 
 
+CEILING_STYLESHEET = f"{WORK}/cn-ceiling.css"
+
+
+def ceiling_stylesheet() -> str:
+    """顶面布置图的样式表：合并样式表后面再接约定包的 cn-ceiling.css（吊顶造型线、跌级线画清楚）。只给顶面布置图用，
+    别的图（cn.css 里吊顶投影是淡灰）不受影响。configure_project 之后调用；返回写进视图的相对路径。"""
+    at = lambda p: os.path.join(os.path.dirname(tool.Ifc.get_path()), *p.split("/"))
+    with open(at(WORK_PATHS["StylesheetPath"]), encoding="utf-8") as fh:
+        base = fh.read()
+    with open(conventions.pack_file("cn-ceiling.css"), encoding="utf-8") as fh:
+        ours = fh.read()
+    with open(at(CEILING_STYLESHEET), "w", encoding="utf-8") as fh:
+        fh.write(base + "\n\n" + ours)
+    return CEILING_STYLESHEET
+
+
+LIGHTS_STYLESHEET = f"{WORK}/cn-lights.css"
+
+
+def lights_stylesheet() -> str:
+    """灯具定位图的样式表：合并样式表 + cn-ceiling.css + cn-lights.css（吊顶造型线淡显，灯和定位尺寸是主角）。"""
+    at = lambda p: os.path.join(os.path.dirname(tool.Ifc.get_path()), *p.split("/"))
+    parts = []
+    for p in (at(WORK_PATHS["StylesheetPath"]), conventions.pack_file("cn-ceiling.css"), conventions.pack_file("cn-lights.css")):
+        with open(p, encoding="utf-8") as fh:
+            parts.append(fh.read())
+    with open(at(LIGHTS_STYLESHEET), "w", encoding="utf-8") as fh:
+        fh.write("\n\n".join(parts))
+    return LIGHTS_STYLESHEET
+
+
+FLOOR_STYLESHEET = f"{WORK}/cn-floor.css"
+
+
+def floor_stylesheet() -> str:
+    """地面铺装图的样式表：合并样式表后面再接约定包的 cn-floor.css（砖缝、门槛石、压条、起铺点、找坡箭头）。只给地面铺装图用。"""
+    at = lambda p: os.path.join(os.path.dirname(tool.Ifc.get_path()), *p.split("/"))
+    parts = []
+    for p in (at(WORK_PATHS["StylesheetPath"]), conventions.pack_file("cn-floor.css")):
+        with open(p, encoding="utf-8") as fh:
+            parts.append(fh.read())
+    with open(at(FLOOR_STYLESHEET), "w", encoding="utf-8") as fh:
+        fh.write("\n\n".join(parts))
+    return FLOOR_STYLESHEET
+
+
 def _write_symbols(path: str) -> None:
     """出图符号 = Bonsai 自带的 symbols.svg，加上约定包 symbols.json 里按纸面大小画的点位符号和它们的变体（symbols.svg_defs，
     同 id 的替换），写到 path（SymbolsPath）；视图里的 SYMBOL 标注引用它们（_paper_symbols）。"""
@@ -268,12 +314,13 @@ def _paper_symbols(drawing, extra=(), z=None) -> int:
         pose = annotate.paper_pose(f, e, den / scales[t.Tag], den, drawing.id())
         suffix, turn = pose[:2]
         shift = (pose[2] if len(pose) > 2 else 0.0) * ifcopenshell.util.unit.calculate_unit_scale(f)   # 沿墙挪开画（米）
+        lift = (pose[3] if len(pose) > 3 else 0.0) * ifcopenshell.util.unit.calculate_unit_scale(f)    # 离开墙面挪进房间（米，墙前排不开的开关面板）
         sym = core.add_annotation(tool.Ifc, tool.Collector, tool.Drawing, drawing=drawing, object_type="SYMBOL", relating_type=None)
-        sym.matrix_world = obj.matrix_world @ Matrix.Translation((shift, 0.0, 0.0)) @ Matrix.Rotation(math.radians(turn), 4, "Z")
+        sym.matrix_world = obj.matrix_world @ Matrix.Translation((shift, lift, 0.0)) @ Matrix.Rotation(math.radians(turn), 4, "Z")
         a = tool.Ifc.get_entity(sym)
         api.pset.edit_pset(f, pset=api.pset.add_pset(f, product=a, name="EPset_Annotation"), properties={"Symbol": t.Tag + suffix})
         api.drawing.assign_product(f, relating_product=e, related_object=a)
-        if shift:   # 引线指回实际位置
+        if shift or lift:   # 引线指回实际位置
             annotate.shift_leader(f, drawing, e, den / scales[t.Tag], pose, p.z if z is None else z)
         n += 1
     if used:
@@ -739,7 +786,31 @@ def has_shift_leaders(drawing) -> bool:
                for a in tool.Drawing.get_group_elements(tool.Drawing.get_drawing_group(drawing)))
 
 
-def _legend(pack, keys, den, x, y, width, walls, extra, extra_width, scope, title, leader=False):
+def _swatch(kind, x, cy):
+    """图例里另加的行（rows）的小图形：tile 方格、wood 错缝木地板、grid 板缝网格、fill 浅灰填充（门槛石）、line 一道粗线（压条）、
+    start 起铺点记号（圆 + 十字）、level 标高符号（湿区完成面）。返回 SVG 片段列表（12×4mm，左端在 x + 1）。"""
+    x0, y0, w, h = x + 1, cy - 2, 12.0, 4.0
+    rect = f"M {x0:.2f},{y0:.2f} L {x0 + w:.2f},{y0:.2f} L {x0 + w:.2f},{y0 + h:.2f} L {x0:.2f},{y0 + h:.2f} Z"   # 用 path 不用 rect：图例不画外框
+    box = f'<path d="{rect}" stroke-width="0.13"/>'
+    ln = lambda a, b, c, d, sw=0.1: f'<path d="M {a:.2f},{b:.2f} L {c:.2f},{d:.2f}" stroke-width="{sw}"/>'
+    if kind in ("tile", "grid"):
+        return [box] + [ln(x0 + w * k / 3, y0, x0 + w * k / 3, y0 + h) for k in (1, 2)] + [ln(x0, cy, x0 + w, cy)]
+    if kind == "wood":
+        return [box, ln(x0, cy, x0 + w, cy), ln(x0 + 4, y0, x0 + 4, cy), ln(x0 + 8, cy, x0 + 8, y0 + h)]
+    if kind == "fill":
+        return [f'<path d="{rect}" fill="#d9d9d9" stroke-width="0.18"/>']
+    if kind == "line":
+        return [ln(x0 + 1, cy, x0 + w - 1, cy, 0.35)]
+    if kind == "level":   # 标高符号：一道线、线下一个倒三角
+        c = x0 + w / 2
+        return [ln(x0 + 2, cy - 1, x0 + w - 2, cy - 1, 0.18), f'<path d="M {c - 1.5:.2f},{cy - 1:.2f} L {c + 1.5:.2f},{cy - 1:.2f} L {c:.2f},{cy + 1.5:.2f} Z" stroke-width="0.18"/>']
+    if kind == "start":
+        c = x0 + w / 2
+        return [f'<circle cx="{c:.2f}" cy="{cy:.2f}" r="1" stroke-width="0.25"/>', ln(c - 2, cy, c + 2, cy, 0.25), ln(c, cy - 2, c, cy + 2, 0.25)]
+    return []
+
+
+def _legend(pack, keys, den, x, y, width, walls, extra, extra_width, scope, title, leader=False, rows=None):
     """图例的 SVG 片段（参数见 add_legend）。返回 (片段, 底边 y, 右边 x)。"""
     from .symbols import HEIGHT_CLASSES, item_polylines
     fs, pitch = LEGEND_MM, 1.35 * LEGEND_MM
@@ -781,6 +852,9 @@ def _legend(pack, keys, den, x, y, width, walls, extra, extra_width, scope, titl
     if leader:   # 水电图上有沿墙挪开画的符号：一小段和引线一样的细线
         cy = row(LEADER_LEGEND, 1.0)
         parts.append(f'<path d="M {x + 2:.2f},{cy:.2f} L {x + 12:.2f},{cy:.2f}" stroke-width="0.13"/>')
+    for label, kind in rows or ():   # 地面材料编号对照、门槛石、压条、起铺点；顶面布置图的铝扣板吊顶（annotate.LEGEND_ROWS）
+        cy = row(label, 4.0)
+        parts += _swatch(kind, x, cy)
     names = conventions.get("walls")
     for mat in [m_ for m_ in names if m_ in set(walls)]:
         cy = row(names[mat], 4.0)
@@ -793,7 +867,8 @@ def _legend(pack, keys, den, x, y, width, walls, extra, extra_width, scope, titl
 
 
 def add_legend(sheet_svg: str, pack_symbols: str, keys, den: int, x: float, y: float, width: float = 64.0,
-               walls=(), extra: str | None = None, title="图例", extra_width: float | None = None, leader: bool = False) -> float:
+               walls=(), extra: str | None = None, title="图例", extra_width: float | None = None, leader: bool = False,
+               rows=None) -> float:
     """在排好的图纸 SVG 上加图例（不加外框）。每行"符号 | 名称 | 默认安装高度"，名称 3.5mm，写不下就换行（wrap_text），
     不缩字。x、y：标题"图例"的左下角（mm）。width：图例宽（符号列 16mm + 名称 + 默认高度）；一套图的图例取同一个宽，
     同一条名称在各张图上断法一致。
@@ -802,11 +877,14 @@ def add_legend(sheet_svg: str, pack_symbols: str, keys, den: int, x: float, y: f
     - walls：本图画出的墙材质名（annotate.wall_materials），按约定包 conventions.json 的 walls 顺序各一行；色块用和墙
       一样的 CSS 类（cut material-cnbearing 加上本图的 d<id> 前缀类），颜色和填充只在 cn.css 里定义；
     - extra：最后一行只有文字（总图的房间简称对照），宽 extra_width（缺省同 width）；
-    - leader：这张图上有沿墙挪开画的符号（has_shift_leaders），点位行后面加一行"引线端点为实际位置"，图形是一小段细线。
+    - leader：这张图上有沿墙挪开画的符号（has_shift_leaders），点位行后面加一行"引线端点为实际位置"，图形是一小段细线；
+    - rows：[(文字, 图形)]（annotate.LEGEND_ROWS：地面材料编号对照、门槛石、压条、起铺点，顶面布置图的铝扣板吊顶），接在点位行后面，
+      图形见 _swatch。
     返回图例底边 y（mm）；超出可放图区时记 JZLOG warn。几样都没有时不画。"""
-    if not (keys or walls or extra or leader):
+    if not (keys or walls or extra or leader or rows):
         return y
-    parts, bottom, _ = _legend(_pack(pack_symbols), keys, den, x, y, width, walls, extra, extra_width, _scope(sheet_svg), title, leader)
+    parts, bottom, _ = _legend(_pack(pack_symbols), keys, den, x, y, width, walls, extra, extra_width, _scope(sheet_svg), title, leader,
+                               rows)
     _append_svg(sheet_svg, parts)
     if bottom > AREA[3]:
         log("warn legend below drawing area", os.path.basename(sheet_svg), round(bottom, 1))
@@ -814,16 +892,16 @@ def add_legend(sheet_svg: str, pack_symbols: str, keys, den: int, x: float, y: f
 
 
 def place_legend(sheet_svg: str, pack_symbols: str, keys, den: int, near, width: float = 64.0, walls=(),
-                 title="图例", extra: str | None = None) -> float | None:
+                 title="图例", extra: str | None = None, rows=None) -> float | None:
     """没给图例留栏的图纸（只画墙体图例的平面图）：在可放图区里找一块空地放图例，不挪视图、不改比例。
     空地按 Edge 渲染出来的图纸量（_drawn_boxes），图例四周离已画的东西至少 LEGEND_GAP_MM；有几处空地时取离 near
     （标题"图例"左下角的理想位置，即同一套图里图例栏的位置）最近的。放不下或量不出来就不画，记一行 JZLOG。
     其余参数同 add_legend。返回图例底边 y（mm），没画返回 None。"""
-    if not (keys or walls or extra):
+    if not (keys or walls or extra or rows):
         return None
     pack, scope, name = _pack(pack_symbols), _scope(sheet_svg), os.path.basename(sheet_svg)
     top = -5.0   # 标题"图例"（5mm 字）的字顶，相对它的基线
-    _, bottom, right = _legend(pack, keys, den, 0.0, 0.0, width, walls, extra, None, scope, title)
+    _, bottom, right = _legend(pack, keys, den, 0.0, 0.0, width, walls, extra, None, scope, title, rows=rows)
     boxes = _drawn_boxes(sheet_svg)
     if boxes is None:
         log("legend skipped, sheet not measured", name)
@@ -833,7 +911,7 @@ def place_legend(sheet_svg: str, pack_symbols: str, keys, den: int, near, width:
         log("legend skipped, no room", name, f"{right:.0f}x{bottom - top:.0f}mm")
         return None
     x, y = spot[0], spot[1] - top
-    parts, bottom, _ = _legend(pack, keys, den, x, y, width, walls, extra, None, scope, title)
+    parts, bottom, _ = _legend(pack, keys, den, x, y, width, walls, extra, None, scope, title, rows=rows)
     _append_svg(sheet_svg, parts)
     log("legend placed", name, round(x, 1), round(y, 1))
     return bottom

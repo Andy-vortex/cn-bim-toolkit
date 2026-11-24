@@ -1,0 +1,49 @@
+{
+ "_说明": "吊顶规则，见同目录 README。sources：依据（条文号或\"惯例\"、自拟概括、参数、可信度 A/B/C/—、状态；条文和网页都待原文核对）。materials：材料（name 图上写的名字，css 建模时的材质名，出图按它分样式）。templates：模板（params 缺省参数，毫米；min_height 能做这种模板的原顶净高下限；fallback 做不了时退成哪种；curtain 换成这种模板时缺省做不做窗帘盒）。rooms：房间类型（../furniture/room_types.json）→ 缺省模板和参数。checks：原顶净高缺省 height、净高门槛 min_net（按房间类型）、做边吊回字形时中间至少剩多大 min_center_m2、中间窄于 center_min_width 的细长部分并入外圈、回字形外圈除去灯槽至少多宽 slot_margin、吊顶块建模厚度 thickness。高度都离本层楼面，毫米。",
+ "sources": {
+  "S1": {"ref": "GB 50096-2011 第 5.5.2、5.5.4 条", "summary": "卧室、起居室净高不低于 2.40m（局部不低于 2.10m，面积不大于 1/3）；厨房、卫生间不低于 2.20m", "params": {"living_bedroom": 2400, "kitchen_bath": 2200}, "level": "B", "status": "待原文核对"},
+  "S2": {"ref": "GB 55038-2025", "summary": "新建住宅层高不低于 3.0m；卧室、起居室净高的新要求见条文", "params": {"storey": 3000}, "level": "B", "status": "待原文核对：净高数值未查到原文，暂按 S1"},
+  "C1": {"ref": "惯例", "summary": "边吊：四周下吊 80～100mm 藏空调管线，中间原顶，层高 2.6m 以上适用", "params": {"drop": [80, 100], "min_height": 2600}, "level": "C", "status": "惯例（装修百科）"},
+  "C2": {"ref": "惯例", "summary": "窗帘盒宽：单层布帘 100～150mm，双层 180～250mm；深 80～100mm", "params": {"single": [100, 150], "double": [180, 250]}, "level": "C", "status": "惯例（装修文章）"},
+  "C3": {"ref": "惯例", "summary": "层高低于 2.8m 不宜做叠级（回字形）吊顶", "params": {"min_height": 2800}, "level": "C", "status": "惯例（装修文章）"},
+  "C4": {"ref": "惯例", "summary": "家装吊顶底净高一般 2.5～2.6m；厨房、卫生间铝扣板吊顶有排风管时约 2.4m", "params": {"kitchen_bath": 2400}, "level": "C", "status": "惯例（装修百科）"},
+  "C5": {"ref": "推断", "summary": "回字形外圈宽 500～600mm、下吊 100～150mm、灯槽宽 100～150mm（没找到可靠出处，取常见做法）", "params": {"width": 600, "drop": 150, "slot": 150}, "level": "—", "status": "推断"},
+  "C6": {"ref": "推断", "summary": "玄关、过道石膏板平顶下吊约 100mm 藏管线", "params": {"drop": 100}, "level": "—", "status": "推断"},
+  "C7": {"ref": "推断", "summary": "边吊、回字形收完以后中间窄于 600mm 的细长部分（如进门过道）留不出有用的原顶，并入外圈一起吊平，不留细缝", "params": {"center_min_width": 600}, "level": "—", "status": "推断"},
+  "C8": {"ref": "惯例", "summary": "厨卫铝扣板常用 300×300 方板，从房间中线对称排板", "params": {"grid": [300, 300]}, "level": "C", "status": "惯例"}
+ },
+ "materials": {
+  "gypsum": {"name": "石膏板", "css": "cn-ceil-gypsum"},
+  "alu": {"name": "铝扣板", "css": "cn-ceil-alu", "grid": [300, 300], "src": ["C8"]},
+  "curtain": {"name": "窗帘盒", "css": "cn-ceil-curtain"}
+ },
+ "templates": {
+  "原顶": {"name": "原顶刷白", "params": {}},
+  "平顶": {"params": {"drop": 100, "bottom": 0, "material": "gypsum", "curtain_width": 200}, "min_height": 2400, "fallback": "原顶", "curtain": false, "src": ["C6", "C4"]},
+  "边吊": {"params": {"width": 400, "drop": 100, "material": "gypsum", "curtain_width": 200}, "min_height": 2600, "fallback": "原顶", "curtain": true, "src": ["C1", "C2"]},
+  "回字形": {"params": {"width": 600, "drop": 150, "slot": 150, "slot_rise": 60, "material": "gypsum", "curtain_width": 200}, "min_height": 2800, "fallback": "边吊", "curtain": false, "src": ["C3", "C5", "C2"]}
+ },
+ "rooms": {
+  "living": {"ceiling": "回字形"},
+  "dining": {"ceiling": "回字形"},
+  "master_bedroom": {"ceiling": "边吊", "curtain": true},
+  "bedroom": {"ceiling": "边吊", "curtain": true},
+  "study": {"ceiling": "边吊", "curtain": true},
+  "kitchen": {"ceiling": "平顶", "bottom": 2400, "material": "alu", "src": ["C4"]},
+  "bathroom": {"ceiling": "平顶", "bottom": 2400, "material": "alu", "src": ["C4"]},
+  "entry": {"ceiling": "平顶"},
+  "corridor": {"ceiling": "平顶"},
+  "balcony": {"ceiling": "原顶"},
+  "storage": {"ceiling": "原顶"},
+  "other": {"ceiling": "原顶"}
+ },
+ "checks": {
+  "height": 2800,
+  "min_net": {"default": 2200, "living": 2400, "dining": 2400, "master_bedroom": 2400, "bedroom": 2400, "study": 2400, "kitchen": 2200, "bathroom": 2200},
+  "min_center_m2": 2.0,
+  "slot_margin": 200,
+  "center_min_width": 600,
+  "thickness": 20,
+  "src": ["S1", "S2", "C7"]
+ }
+}

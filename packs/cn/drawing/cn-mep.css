@@ -13,3 +13,6 @@
 
 /* 符号沿墙挪开画时指回实际位置的引线（annotate.shift_leader）：细实线 */
 .jz-shift { stroke: #000; stroke-width: 0.13; fill: none; }
+
+/* 灯带：沿灯槽的虚线（annotate.light_strips，开关连线图上也画） */
+.jz-strip { stroke: #000; stroke-width: 0.25; stroke-dasharray: 1.2, 0.8; fill: none; }

@@ -38,7 +38,7 @@ import re
 
 import numpy as np
 from shapely.geometry import LineString, Point, Polygon, box
-from shapely.ops import unary_union
+from shapely.ops import linemerge, unary_union
 
 from . import conventions, furngen, furnish, openings, scheme
 from .unitview import unit_ids  # noqa: F401（户 id 只有一份，按户出图也用它）
@@ -55,7 +55,10 @@ OPTS = {"beside": ("side", "gap"), "behind": ("dx",), "on": ("count", "clear"), 
         "door": ("gap",), "wall": ("prefer", "count", "fill"), "ceiling": ()}
 ASK_KEYS = ("point", "z", "controls")   # 意图里每条另认的字段（规则表另有 if、src）
 PARTS = ("sink", "hob", "basin")
-CHECKS = ("in_door", "blocked", "outside_room", "in_wall", "overlap", "socket_count", "switch_reach", "near_shower", "circuit_over")
+CHECKS = ("in_door", "blocked", "outside_room", "in_wall", "overlap", "socket_count", "switch_reach", "near_shower", "circuit_over",
+          "ceiling_light", "circuit_gang")
+CEIL_ANCHORS = ("ring", "slot", "axis")   # 跟吊顶走的灯（筒灯、灯带）的锚点：方案里没有吊顶块时一个都不放、也不记 skipped
+GROUPED = ("downlight", "strip")          # 成组控制的灯：同一组连成一串，开关只接这一组的第一盏
 NO_BLOCK = ("light", "cold", "hot", "drain", "floor_drain")   # 灯、给排水点就是要在家具上方、背后，不查挡没挡
 DOOR_H = openings.DEFAULT_DOOR_H
 # 手写的点位（没有 plan_id）按符号认类别：数插座、免查遮挡用
@@ -141,7 +144,10 @@ def _env(rec: dict, sch: dict | None) -> dict:
         rm["entrance"] = [o for o in rm["doors"] if rm["unit"] and o.get("leafs", 1) != 0 and (
             o.get("exterior") or len(o["rooms"]) == 1
             or any(by.get(x) is None or by[x]["unit"] != rm["unit"] or by[x]["public"] for x in o["rooms"] if x != rm["id"]))]
-    return {"rooms": rooms, "by": by, "ops": after["openings"],
+    ceil = {}
+    for b in (sch or {}).get("ceilings", []):
+        ceil.setdefault(b["room"], []).append(b)
+    return {"rooms": rooms, "by": by, "ops": after["openings"], "ceil": ceil,
             "walls": unary_union([Polygon(w["polygon"]).buffer(0) for w in after["walls"] if len(w["polygon"]) >= 3]),
             "doors": [(o, openings.rec_opening_zones(o), openings.rec_frame(o)) for o in doors]}
 
@@ -394,9 +400,298 @@ def _spots(r, rm, E, key, z, kind, why) -> list:
         return [(best[1], best[2], best[0]["id"])] if best else []
     if a == "ceiling":
         if v != "center":
-            raise ValueError("ceiling 只有 center（房间顶面中心）")
+            raise ValueError(f"ceiling 是 center、{'、'.join(CEIL_ANCHORS)} 之一")
         return [(np.array(rm["label"], dtype=float), 0.0, rm["id"])]
     raise ValueError(f"{a} 锚点要单独找")
+
+
+def _cr(a, b) -> float:
+    return float(a[0] * b[1] - a[1] * b[0])
+
+
+def _runs(line) -> list:
+    """线 → 直段 [(起点, 终点)]，在拐角处断开；闭合的环首尾共线的两段并成一段。"""
+    out = []
+    line = linemerge(line) if line.geom_type == "MultiLineString" else line
+    for g in getattr(line, "geoms", [line]):
+        if g.geom_type != "LineString" or g.length == 0:
+            continue
+        cs = [np.array(c, dtype=float) for c in g.coords]
+        runs, run0 = [], cs[0]
+        for i in range(1, len(cs) - 1):
+            u1, u2 = cs[i] - cs[i - 1], cs[i + 1] - cs[i]
+            n1, n2 = np.linalg.norm(u1), np.linalg.norm(u2)
+            if n1 > 1e-6 and n2 > 1e-6 and abs(_cr(u1 / n1, u2 / n2)) > 0.1:
+                runs.append((run0, cs[i]))
+                run0 = cs[i]
+        runs.append((run0, cs[-1]))
+        if g.is_closed and len(runs) > 1:
+            (a0, b0), (a1, b1) = runs[0], runs[-1]
+            u0, u1 = (b0 - a0) / np.linalg.norm(b0 - a0), (b1 - a1) / np.linalg.norm(b1 - a1)
+            if abs(_cr(u0, u1)) < 0.1 and float(u0 @ u1) > 0:
+                runs = [(a1, b0)] + runs[1:-1]
+        out += [(a, b) for a, b in runs if np.linalg.norm(b - a) > 1]
+    return out
+
+
+def _ceiling_spots(rm, E, v, pts) -> list:
+    """跟吊顶走的灯（规则表 checks.ceiling_lights 的门槛）→ [(位置, 灯带路径或 None)]。没有对应的吊顶块返回空。
+    ring：边吊、回字形外圈的带子中线（离墙半个带宽）分成直段（不整个落在吊顶块里、离墙不到 wall_min、离窗帘盒不到
+    curtain_clear 的部分先去掉），两段平行、相距不到 spacing_min 的地方（窄过道里的两侧）只留它们正中的一段（_one_row）；
+    长的段先放，每段离两头至少 end_min（拐角处两排各让到拐角两盏中心距不小于 spacing_min，_end_clear），再避开离本房已有的
+    灯不够远的地方（主灯 light_clear，筒灯 spacing_min），间距在 spacing_min～spacing_max 之间均布、取整到 spacing_round、
+    余数分给两头（_even）；短于 min_run 的段不放，放不下两盏的段只放一盏在正中。axis：石膏板平顶（整块）沿房间长向中线，同样均布。slot：回字形灯槽中线一条灯带（每段连着的一条），
+    闭合的从离房门最近的拐点起。"""
+    C = LIMITS["ceiling_lights"]
+    blocks = E["ceil"].get(rm["id"], [])
+    poly = lambda b: Polygon(b["polygon"], b.get("holes") or [])
+    R = Polygon([w["a"] for w in rm["walls"]]).buffer(0)
+    curtain = unary_union([poly(b) for b in blocks if b["part"] == "窗帘盒"])
+    if v == "slot":
+        out = []
+        for b in [b for b in blocks if b["part"] == "灯槽"][:1]:
+            band = unary_union([poly(x) for x in blocks if x["part"] == "灯槽"])
+            mid = R.buffer(-(b["width"] - b["slot"] / 2), join_style="mitre").boundary.intersection(band.buffer(0.5))
+            o = _main_door(rm, E["by"])
+            door = openings.rec_frame(o)[0] if o is not None else np.array(R.centroid.coords[0])
+            mid = linemerge(mid) if mid.geom_type == "MultiLineString" else mid
+            for g in getattr(mid, "geoms", [mid]):
+                if g.geom_type != "LineString" or g.length < C["min_run"]:
+                    continue
+                cs = [(round(x, 1), round(y, 1)) for x, y in g.coords]
+                if g.is_closed:   # 环：从离房门最近的拐点起
+                    k = min(range(len(cs) - 1), key=lambda i: (math.dist(cs[i], door), i))
+                    cs = cs[k:-1] + cs[:k + 1]
+                out.append((np.array(cs[0]), [list(c) for c in cs]))
+        return out
+    if v == "ring":
+        mine = [b for b in blocks if b["part"] in ("边吊", "外圈")]
+        if not mine:
+            return []
+        band = mine[0]["width"] - mine[0].get("slot", 0)
+        line = R.buffer(-band / 2, join_style="mitre").boundary
+    else:   # axis：石膏板平顶
+        mine = [b for b in blocks if b["part"] == "整块" and b["material"] == "gypsum"]
+        if not mine:
+            return []
+        rect = R.minimum_rotated_rectangle
+        q = [np.array(c) for c in rect.exterior.coords[:3]]
+        e = max((q[1] - q[0], q[2] - q[1]), key=lambda d: float(np.linalg.norm(d)))
+        cen = np.array(rect.centroid.coords[0])
+        line = LineString([cen - e, cen + e])
+    area = unary_union([poly(b) for b in mine])
+    ok = area.buffer(-LIMITS["ceiling_lights"]["radius"]).intersection(R.buffer(-C["wall_min"])).difference(curtain.buffer(C["curtain_clear"]))
+    runs = _one_row(_runs(line.intersection(ok)), C["spacing_min"], ok, R)
+    # 离不开的灯：本房已有的灯（主灯、家具上方的灯离 light_clear 以上；已有的筒灯离 spacing_min 以上），每排放好后也算进去
+    keep = [(np.array([p["x"], p["y"]]), C["spacing_min"] if p["type"] in GROUPED else C["light_clear"])
+            for p in pts if p["kind"] == "light" and p["room"] == rm["id"] and p["type"] != "strip"]
+    out, placed = [], []
+    for a, b in sorted(runs, key=lambda r: (-round(float(np.linalg.norm(r[1] - r[0])), 1), round(float(r[0][0]), 1), round(float(r[0][1]), 1))):
+        L = float(np.linalg.norm(b - a))
+        if L < C["min_run"]:
+            continue
+        u = (b - a) / L
+        e0, e1 = _end_clear(a, u, runs, C), _end_clear(b, -u, runs, C)
+        # 这一段上能放灯的地方：两头各让 e0、e1，再去掉离已有的灯不够远的
+        cuts = []
+        for q, r_ in keep:
+            t, d = float((q - a) @ u), abs(_cr(u, q - a))
+            if d < r_:
+                h = math.sqrt(r_ * r_ - d * d)
+                cuts.append((t - h, t + h))
+        ok_at = lambda t: all(not (c0 < t < c1) for c0, c1 in cuts)
+        if L - e0 - e1 < C["spacing_min"]:   # 放不下两盏：只放一盏，在这一段正中
+            ts = [L / 2] if ok_at(L / 2) else []
+        else:
+            ts = []
+            for s0, s1 in _subtract((e0, L - e1), cuts):
+                ts += _even(s0, s1, C)
+        if len(ts) >= 2:
+            ts = _symmetric(ts, a, u, R, e0, L - e1, ok_at, C)
+        first = len(out)
+        for t in ts:
+            c = a + u * t
+            out.append((c, None))
+            keep.append((c, C["spacing_min"]))
+        placed.append((a, u, L, e0, e1, list(range(first, len(out)))))
+    _align_opposite(out, placed, keep, C)
+    return out
+
+
+def _wall_dist(R, c, d) -> float:
+    """c 沿 d 到房间边的距离（近的那个交点）；没有返回 inf。"""
+    hit = LineString([tuple(c), tuple(c + d * 1e5)]).intersection(R.exterior)
+    pts = [np.array(q) for g in getattr(hit, "geoms", [hit]) for q in getattr(g, "coords", [])]
+    ds = [float(np.linalg.norm(q - c)) for q in pts if np.linalg.norm(q - c) > 1e-3]
+    return min(ds) if ds else math.inf
+
+
+def _symmetric(ts, a, u, R, lo, hi, ok_at, C) -> list:
+    """一排灯两头到墙的距离只差一点（不到 end_sym_max）时取对称：近墙那头往里收到和另一头一样远，再按取整的间距重排，余数分给
+    两头（只往里收，不会更靠近窗帘盒、拐角）；排不下（间距小于 spacing_min、落到不能放灯的地方）就保持原样。"""
+    d0, d1 = _wall_dist(R, a + u * ts[0], -u), _wall_dist(R, a + u * ts[-1], u)
+    if not 0.5 < abs(d0 - d1) < C["end_sym_max"]:
+        return ts
+    e = max(d0, d1)
+    t0, t1 = ts[0] + (e - d0), ts[-1] - (e - d1)
+    k = len(ts) - 1
+    step = C["spacing_round"]
+    s = math.floor((t1 - t0) / k / step + 1e-9) * step
+    if s < C["spacing_min"]:
+        return ts
+    t0 += ((t1 - t0) - s * k) / 2
+    new = [t0 + s * i for i in range(k + 1)]
+    return new if all(lo - 1e-6 <= t <= hi + 1e-6 and ok_at(t) for t in new) else ts
+
+
+def _align_opposite(out, placed, keep, C) -> None:
+    """同一圈里相对的两排（平行、隔着房间、沿线大半重叠）可布灯的长度相差不到 align_within 个间距时，两排灯位对齐：长的那排改用
+    短的那排的排法（投到长的那排上，两头多出来的留空）；改了以后仍要在这一排能放灯的范围里、离别的灯不小于 spacing_min，
+    不行就各排各的。就地改 out。"""
+    for i, (a, u, L, e0, e1, idx) in enumerate(placed):
+        for a2, u2, L2, e02, e12, idx2 in placed[i + 1:]:
+            if len(idx) < 2 or len(idx) != len(idx2) or abs(_cr(u, u2)) > 0.01 or abs(_cr(u, a2 - a)) < C["spacing_min"]:
+                continue
+            ta = sorted(float((out[k][0] - a) @ u) for k in idx)
+            tb = sorted(float((out[k][0] - a) @ u) for k in idx2)   # 第二排投到第一排的轴上
+            sa, sb = ta[-1] - ta[0], tb[-1] - tb[0]
+            step = min(sa, sb) / (len(idx) - 1)
+            if max(abs(x - y) for x, y in zip(ta, tb)) < 0.5 or abs(sa - sb) >= C["align_within"] * step:
+                continue
+            short_t, long_set = (ta, (a2, u2, L2, e02, e12, idx2)) if sa <= sb else (tb, (a, u, L, e0, e1, idx))
+            la, lu, lL, le0, le1, lidx = long_set
+            base = a + u * 0   # 第一排的轴
+            mine = {k for k in lidx}
+            others = [q for q, r_ in keep if not any(np.allclose(q, out[k][0]) for k in mine)]
+            new = []
+            for t in short_t:
+                p = base + u * t
+                tl = float((p - la) @ lu)   # 投到长的那排上
+                c = la + lu * tl
+                if not (le0 - 1e-6 <= tl <= lL - le1 + 1e-6) or any(np.linalg.norm(c - q) < C["spacing_min"] - 1e-6 for q in others):
+                    new = None
+                    break
+                new.append(c)
+            if new:
+                order = sorted(lidx, key=lambda k: float((out[k][0] - a) @ u))
+                for k, c in zip(order, new):
+                    out[k] = (c, None)
+
+
+def _even(s0, s1, C) -> list:
+    """s0～s1（沿一排的位置）里均布筒灯：间距不超过 spacing_max、不小于 spacing_min，取整到 spacing_round，余数分给两头；
+    放不下两盏的放一盏在正中。返回各盏的位置。"""
+    use = s1 - s0
+    if use < C["spacing_min"]:
+        return [(s0 + s1) / 2] if use >= 0 else []
+    k = max(1, math.ceil(use / C["spacing_max"] - 1e-9))   # 间隔数
+    if use / k < C["spacing_min"]:
+        k = max(1, k - 1)
+    step = C["spacing_round"]
+    s = math.floor(min(C["spacing_max"], use / k) / step + 1e-9) * step
+    t0 = s0 + (use - s * k) / 2
+    return [t0 + s * i for i in range(k + 1)]
+
+
+def _end_clear(p, u, runs, C) -> float:
+    """一排的一头 p（u 指向这一排里面）离端点至少多远：拐角处（另一排的端点也在 p）两排各让到两盏拐角灯的中心距不小于
+    spacing_min（两条射线夹角 φ：让 spacing_min / (2 sin(φ/2))），别处是 end_min。"""
+    e = C["end_min"]
+    for a, b in runs:
+        for q, v in ((a, b - a), (b, a - b)):
+            n = float(np.linalg.norm(v))
+            if n < 1 or np.linalg.norm(q - p) > 1:
+                continue
+            v = v / n
+            if abs(_cr(u, v)) < 1e-6 and float(u @ v) > 0:   # 就是这一排自己
+                continue
+            half = math.acos(max(-1.0, min(1.0, float(u @ v)))) / 2
+            if half > 1e-6:
+                e = max(e, C["spacing_min"] / (2 * math.sin(half)))
+    return e
+
+
+def _one_row(runs, gap, ok, room) -> list:
+    """窄的地方只放一排：两段平行的直段相距不到 gap（spacing_min，如 1.2m 宽的过道里外圈的两侧）时，重叠的那一截两段都去掉，
+    换成它们正中的一段（还要在能放灯的范围 ok 里）。"""
+    runs = [(np.array(a, dtype=float), np.array(b, dtype=float)) for a, b in runs]
+    mids = []
+    for _ in range(len(runs) * len(runs) + 1):
+        hit = None
+        for i, (a, b) in enumerate(runs):
+            Li = float(np.linalg.norm(b - a))
+            u = (b - a) / Li
+            for j in range(i + 1, len(runs)):
+                c, d = runs[j]
+                Lj = float(np.linalg.norm(d - c))
+                if Lj < 1 or abs(_cr(u, (d - c) / Lj)) > 0.01:
+                    continue
+                off = _cr(u, c - a)
+                if not 1 < abs(off) < gap:
+                    continue
+                t0, t1 = sorted((float((c - a) @ u), float((d - a) @ u)))
+                o0, o1 = max(0.0, t0), min(Li, t1)
+                if o1 - o0 <= 1:
+                    continue
+                nrm = np.array([-u[1], u[0]]) * off / 2
+                mid = LineString([a + u * o0 + nrm, a + u * o1 + nrm])
+                if LineString([a + u * (o0 + o1) / 2, a + u * (o0 + o1) / 2 + 2 * nrm]).difference(room.buffer(1)).length > 1:
+                    continue   # 两段之间隔着墙（不是同一块吊顶里的窄处）
+                hit = (i, j, o0, o1, mid if mid.difference(ok.buffer(1)).length <= 1 else None)
+                break
+            if hit:
+                break
+        if hit is None:
+            return runs + _straighten(mids, ok)
+        i, j, o0, o1, mid = hit
+        a, b = runs[i]
+        c, d = runs[j]
+        u = (b - a) / np.linalg.norm(b - a)
+        uj = (d - c) / np.linalg.norm(d - c)
+        tj = sorted((float((a + u * o0 - c) @ uj), float((a + u * o1 - c) @ uj)))
+        cut_i = [(a, a + u * o0), (a + u * o1, b)]
+        cut_j = [(c, c + uj * tj[0]), (c + uj * tj[1], d)]
+        if mid is not None:   # 两排都去掉重叠的那一截，换成正中一排
+            keep = cut_i + cut_j
+        else:   # 正中放不了灯（如回字形的灯槽在那里）：只留长的那一排
+            keep = [(a, b)] + cut_j if np.linalg.norm(b - a) >= np.linalg.norm(d - c) else cut_i + [(c, d)]
+        runs = [r for k, r in enumerate(runs) if k not in (i, j)] + [(p, q) for p, q in keep if np.linalg.norm(q - p) > 1]
+        if mid is not None:   # 中线另放：不再和别的段配对
+            mids.append((np.array(mid.coords[0]), np.array(mid.coords[-1])))
+    return runs + _straighten(mids, ok)
+
+
+def _straighten(mids, ok) -> list:
+    """同一段直过道里的中线取直共线：平行、沿线首尾相接（或重叠）、离得不到 wall_min 的几段中线（过道一侧墙有小台阶时会错开一点）
+    并成一段，放在最长那段的线上（仍要在能放灯的范围 ok 里，不在就不并）。"""
+    tol = LIMITS["ceiling_lights"]["wall_min"]
+    mids = [(np.array(a, dtype=float), np.array(b, dtype=float)) for a, b in mids]
+    merged = True
+    while merged:
+        merged = False
+        for i, (a, b) in enumerate(mids):
+            L = float(np.linalg.norm(b - a))
+            u = (b - a) / L
+            for j in range(len(mids)):
+                if j == i:
+                    continue
+                c, d = mids[j]
+                Lj = float(np.linalg.norm(d - c))
+                if Lj > L or abs(_cr(u, (d - c) / Lj)) > 0.01 or not 0 < abs(_cr(u, c - a)) <= tol:
+                    continue
+                t = sorted((float((c - a) @ u), float((d - a) @ u)))
+                if t[0] > L + 1 or t[1] < -1:   # 沿线不相接
+                    continue
+                lo, hi = min(0.0, t[0]), max(L, t[1])
+                seg = LineString([a + u * lo, a + u * hi])
+                if seg.difference(ok.buffer(1)).length > 1:
+                    continue
+                mids = [m for k, m in enumerate(mids) if k not in (i, j)] + [(a + u * lo, a + u * hi)]
+                merged = True
+                break
+            if merged:
+                break
+    return mids
 
 
 def _count(r) -> int:
@@ -434,7 +729,7 @@ def _check(r, extra=()) -> str:
     if "controls" in r and (r["controls"] not in ("main", "lights") or POINTS[t]["kind"] not in ("switch", "bed_switch")):
         raise ValueError("controls 只给开关，写 main（主灯）或 lights（本房的灯）")
     for k, ok in (("side", ("left", "right", "both")), ("at", ("center", "left", "right")), ("door", ("room", "entrance")),
-                  ("ceiling", ("center",)), ("wall", ("free",))):
+                  ("ceiling", ("center",) + CEIL_ANCHORS), ("wall", ("free",))):
         if k in r and r[k] not in ok:
             raise ValueError(f"{k} 是 {'、'.join(ok)} 之一")
     if anchors[0] not in ("wall", "door", "ceiling"):
@@ -458,7 +753,7 @@ def _add(r, rm, E, pts, need, skipped, ask=False) -> tuple[int, int]:
     anchor = next(k for k in ANCHORS if k in r)
     skip = lambda why: skipped.append({"room": rm["name"], "room_id": rm["id"], "point": t, "anchor": f"{anchor}:{r[anchor]}", "reason": why})
     new = lambda pos, rot, room: {"type": t, "kind": P["kind"], "x": float(pos[0]), "y": float(pos[1]), "z": z, "rot": rot, "room": room,
-                                  "main": anchor == "ceiling", "controls": r.get("controls")}
+                                  "main": anchor == "ceiling" and r[anchor] == "center", "controls": r.get("controls")}
     if anchor == "wall":
         have = sum(q["kind"] == P["kind"] for q in pts)
         n = max(0, need.get(P["kind"], 0) - have) if r.get("fill") else _count(r)
@@ -474,6 +769,14 @@ def _add(r, rm, E, pts, need, skipped, ask=False) -> tuple[int, int]:
                 return k, n - k
             pts.append(new(hit[0], _deg(hit[1]["u"]), rm["id"]))
         return n, 0
+    if anchor == "ceiling" and r["ceiling"] in CEIL_ANCHORS:   # 跟吊顶走的灯：没有吊顶块就一个都不放（不记 skipped）
+        got = _ceiling_spots(rm, E, r["ceiling"], pts)
+        for c, path in got:
+            q = new(c, 0.0, rm["id"])
+            if path:
+                q["path"], q["length"] = path, round(LineString(path).length)
+            pts.append(q)
+        return len(got), 0
     why = []
     spots = _spots(r, rm, E, key, z, P["kind"], why)
     for w in why:
@@ -481,7 +784,7 @@ def _add(r, rm, E, pts, need, skipped, ask=False) -> tuple[int, int]:
     missing = 0 if not spots else len(why)   # 一件家具都没有时 why 只有一条"没有这件家具"
     for s in spots:
         q = new(*s)
-        if q["kind"] == "light" and not q["main"]:
+        if q["kind"] == "light" and not q["main"] and t not in GROUPED:
             for m in [m for m in pts if m["main"] and math.hypot(m["x"] - q["x"], m["y"] - q["y"]) < LIMITS["light_gap"]]:
                 pts.remove(m)
                 q["main"] = True
@@ -575,32 +878,191 @@ def place(rec: dict, sch: dict, intent: dict | None = None, units=None) -> tuple
                 pts.remove(q)
                 skipped.append({"room": rm["name"], "room_id": rm["id"], "point": q["type"], "anchor": f"plan_id:{q['id']}",
                                 "reason": "它控制的灯都删了（意图 remove），开关一并去掉"})
+        if _group_lights(rm, E, pts, seq):   # 门口没有面板：提醒（筒灯、灯带不挂到床头开关上）
+            skipped.append({"room": rm["name"], "room_id": rm["id"], "point": "switch", "anchor": "door:room",
+                            "reason": "门口没有开关面板：筒灯、灯带没有开关控制（床头开关只管主灯）"})
         for q in pts:
             it = {"key": "", "name": POINTS[q["type"]]["name"], "x": round(q["x"], 1), "y": round(q["y"], 1), "z": q["z"],
                   "rot": round(q["rot"] % 360.0, 3) % 360.0, "room": q["room"], "plan_id": q["id"]}
             if q["controls"]:
-                it["controls"] = [x["id"] for x in pts if x["kind"] == "light" and (q["controls"] == "lights" or x["main"])]
+                it["controls"] = q["ctl"] if "ctl" in q else \
+                    [x["id"] for x in pts if x["kind"] == "light" and (q["controls"] == "lights" or x["main"])]
+            for k in ("next", "path", "length"):
+                if k in q:
+                    it[k] = q[k]
             it["key"] = _symbol(q["type"], len(it.get("controls", [])))
             items.append(it)
     _circuits(items, {r["id"]: r["unit"] for r in E["rooms"]})
     return items, errors, skipped
 
 
+def _group_lights(rm, E, pts, seq) -> list:
+    """有筒灯、灯带的房间（只在方案有吊顶时）：灯按组控制。主灯和家具上方的灯照旧各一组，筒灯一组、灯带一组；同一组按离
+    开关由近到远连成一串（next），开关只接每组的第一盏（ctl）；一串超过一路的上限时沿串拆成几组（_split_chain，后几段从离开关
+    近的那头接）。门口开关的联数 = 组数，一个面板最多 checks.ceiling_lights 的 panel_max 联、接的灯不超过一路的上限（_panels），
+    多出来的挨着（中心隔 panel_step，往离门远的一侧）再加面板。同一个门口只有一块面板：卧室门口的双控开关
+    （管主灯）加上筒灯、灯带各一联，成了多联双控面板（符号按联数：单联、双联、三联双控）；床头开关照旧只管主灯。
+    没有筒灯、灯带时什么都不改。"""
+    chains = [[q for q in pts if q["type"] == t] for t in GROUPED]
+    if not any(chains):
+        return []
+    C, N = LIMITS["ceiling_lights"], LIMITS["ceiling_lights"]["panel_max"]
+    door_sw = [q for q in pts if q["controls"] and q["kind"] == "switch"]
+    ref = (door_sw[0]["x"], door_sw[0]["y"]) if door_sw else tuple(rm["label"])
+    heads, load = [], {}   # load：每一联接的灯占这一路多少名额
+    for left in chains:
+        cur, chain = ref, []
+        while left:
+            nx = min(left, key=lambda q: (math.hypot(q["x"] - cur[0], q["y"] - cur[1]), q["id"]))
+            left.remove(nx)
+            chain.append(nx)
+            cur = (nx["x"], nx["y"])
+        for k, part in enumerate(_split_chain(chain)):   # 一串超过一路的上限：沿串连续拆成几组，各占一联
+            # 拆出来的后几段从离开关近的那头接（一圈灯的最后一段多半又回到门口），接线不用横穿房间
+            if k and math.dist(ref, (part[-1]["x"], part[-1]["y"])) < math.dist(ref, (part[0]["x"], part[0]["y"])) - 1:
+                part = part[::-1]
+            for a, b in zip(part, part[1:]):
+                a["next"] = b["id"]
+            heads.append(part[0]["id"])
+            load[part[0]["id"]] = sum(_weight(q["type"]) for q in part)
+    plain = [q["id"] for q in pts if q["kind"] == "light" and q["type"] not in GROUPED]
+    for q in [q for q in pts if q["controls"]]:
+        q["ctl"] = [x["id"] for x in pts if x["kind"] == "light" and x["main"]] if q["controls"] == "main" else plain + heads
+    base = next((q for q in door_sw if q["controls"] == "lights"), door_sw[0] if door_sw else None)
+    if base is None:
+        return heads   # 门口没有开关面板（意图删了、放不下）：筒灯、灯带没有开关；床头开关只管主灯，不往它上面挂
+    # 同一个门口的各组合在一块面板上（联数 = 组数）：双控开关（管主灯）的面板再加上筒灯、灯带各一联，成了多联双控面板
+    gangs = base["ctl"] + ([h for h in heads if h not in base["ctl"]] if base["controls"] == "main" else [])
+    w = {q["id"]: _weight(q["type"]) for q in pts}
+    base["ctl"], *rest = _panels(gangs, lambda g: load.get(g, w.get(g, 1)), N)
+    o = _main_door(rm, E["by"])
+    dc = openings.rec_frame(o)[0] if o is not None else np.array(ref)
+    u, p0 = np.array([math.cos(math.radians(base["rot"])), math.sin(math.radians(base["rot"]))]), np.array([base["x"], base["y"]])
+    s = 1.0 if np.linalg.norm(p0 + u * C["panel_step"] - dc) >= np.linalg.norm(p0 - u * C["panel_step"] - dc) else -1.0
+    for k, ctl in enumerate(rest, 1):
+        room = E["by"].get(base["room"], rm)
+        key = _symbol("switch", len(ctl))
+        cand = [p0 + u * s * k * C["panel_step"], p0 - u * s * k * C["panel_step"]]
+        pos = next((c for c in cand if not _fits(E, room, key, c, base["rot"], base["z"], "switch")), cand[0])
+        seq["switch"] = seq.get("switch", 0) + 1
+        pts.append({"type": "switch", "kind": "switch", "x": float(pos[0]), "y": float(pos[1]), "z": base["z"], "rot": base["rot"],
+                    "room": base["room"], "main": False, "controls": "lights", "ctl": ctl, "id": f"switch-{rm['id']}-{seq['switch']}"})
+
+
+def _weight(t) -> int:
+    """这类点位在它那一路占几个名额（规则表 circuits 的 weight，缺省 1；不进回路的 0）。"""
+    c = CIRCUITS.get(POINTS.get(t, {}).get("circuit"), None)
+    return c.get("weight", {}).get(t, 1) if c is not None else 0
+
+
+def _split_chain(chain) -> list:
+    """一串灯（同一联开关接的）占的名额超过这一路的上限（规则表 circuits 的 max）：沿串连续拆成几组，组数最少、各组灯数尽量均匀
+    （前面的组多一盏）；不超过就原样一组。"""
+    if not chain:
+        return []
+    cap = CIRCUITS.get(POINTS[chain[0]["type"]].get("circuit"), {}).get("max")
+    total = sum(_weight(q["type"]) for q in chain)
+    if not cap or total <= cap:
+        return [chain]
+    n = len(chain)
+    for m in range(-(-total // cap), n + 1):
+        sizes = [n // m + (i < n % m) for i in range(m)]
+        out = [chain[sum(sizes[:i]):sum(sizes[:i + 1])] for i in range(m)]
+        if all(sum(_weight(q["type"]) for q in p) <= cap for p in out):
+            return out
+    return [[q] for q in chain]
+
+
+def _panels(gangs, load, n) -> list:
+    """门口的各联排到面板上：一块面板最多 n 联；一块面板接的灯合起来超过一路的上限时，这一联换到下一块（一块面板只进一路，
+    回路表接得出来）。都放得下时就是按顺序每 n 联一块。"""
+    cap = CIRCUITS.get(POINTS[GROUPED[0]].get("circuit"), {}).get("max")
+    out = []
+    for g in gangs:
+        p = next((p for p in out if len(p) < n and (not cap or sum(map(load, p)) + load(g) <= cap)), None)
+        if p is None:
+            out.append(p := [])
+        p.append(g)
+    return out or [[]]
+
+
+def _control_groups(mine, by) -> tuple[list, dict]:
+    """一户一个回路前缀里的点位 → (控制组, 开关每一联的灯)。控制组 = 一联开关加它接的整串灯（next 连着）；双控的两只开关接同一串，
+    算一组。没有开关接的灯、手写的点位各自一组。返回的组按 mine 里第一次出现的顺序。"""
+    ids = {it["plan_id"] for it in mine}
+    root = {i: i for i in ids}
+
+    def find(i):
+        while root[i] != i:
+            root[i] = root[root[i]]
+            i = root[i]
+        return i
+    gang = {}
+    for it in mine:
+        if not it.get("controls"):
+            continue
+        gang[it["plan_id"]] = []
+        for h in it["controls"]:
+            chain, cur = [], h
+            while cur in ids and cur not in chain:
+                chain.append(cur)
+                cur = by[cur].get("next")
+            gang[it["plan_id"]].append(chain)
+            for a in chain[1:]:
+                root[find(a)] = find(chain[0])
+    groups = {}
+    for it in mine:
+        if it["plan_id"] not in gang:
+            groups.setdefault(find(it["plan_id"]), []).append(it)
+    return list(groups.values()), gang
+
+
 def _circuits(items, unit_of) -> None:
     """按户、按回路前缀（规则表 circuits 的顺序）依次编号；有 max 的满了换下一路（weight：柜机占 2 个名额，挂机 1 个）。
-    一个前缀里先排名额多的（柜机单独一路，挂机两台一路），名额相同的按方案里的顺序。"""
+    装的单位是控制组（一联开关和它接的整串灯，不拆）；同一块面板（和与它双控的开关）接的各组能一起装下时一起装，装不下才按组分开。
+    一个前缀里先排名额多的（柜机单独一路，挂机两台一路），名额相同的按方案里的顺序。开关的回路 = 它那一联接的灯的回路；
+    一块面板各联不在同一路时（很少：面板加上和它双控的开关超过一路的上限）另记 gang_circuits（按联）。"""
+    by = {it["plan_id"]: it for it in items}
     for unit in dict.fromkeys(unit_of[it["room"]] for it in items):
         for pre, c in CIRCUITS.items():
-            k, used = 1, 0
             weight = lambda it: c.get("weight", {}).get(point_type(it), 1)
-            for it in sorted((it for it in items if unit_of[it["room"]] == unit and POINTS[point_type(it)].get("circuit") == pre),
-                             key=lambda it: -weight(it)):
-                t = point_type(it)
-                w = c.get("weight", {}).get(t, 1)
-                if c.get("max") and used and used + w > c["max"]:
-                    k, used = k + 1, 0
-                used += w
-                it["circuit"] = f"{pre}{k}"
+            mine = sorted((it for it in items if unit_of[it["room"]] == unit and POINTS[point_type(it)].get("circuit") == pre),
+                          key=lambda it: -weight(it))
+            groups, gang = _control_groups(mine, by)
+            gid = {it["plan_id"]: n for n, g in enumerate(groups) for it in g}
+            link = {n: n for n in range(len(groups))}   # 面板（开关）把它接的各组连成一束
+
+            def top(n):
+                while link[n] != n:
+                    n = link[n]
+                return n
+            for chains in gang.values():
+                ns = sorted({top(gid[ch[0]]) for ch in chains if ch})
+                for n in ns[1:]:
+                    link[n] = ns[0]
+            bundles = {}
+            for n in range(len(groups)):
+                bundles.setdefault(top(n), []).append(groups[n])
+            used = [0]   # 每一路已占的名额；装进第一路放得下的（都只占 1 个名额时就是按顺序装满一路换下一路）
+            for b in sorted(bundles.values(), key=lambda b: -max(weight(it) for g in b for it in g)):
+                w = sum(weight(it) for g in b for it in g)
+                for part in ([b] if not c.get("max") or w <= c["max"] else [[g] for g in b]):
+                    pw = sum(weight(it) for g in part for it in g)
+                    k = next((k for k, u in enumerate(used) if not c.get("max") or not u or u + pw <= c["max"]), None)
+                    if k is None:
+                        used.append(0)
+                        k = len(used) - 1
+                    used[k] += pw
+                    for g in part:
+                        for it in g:
+                            it["circuit"] = f"{pre}{k + 1}"
+            k = len(used)
+            for it in mine:   # 开关：每一联跟它接的灯走
+                if it["plan_id"] in gang:
+                    gc = [by[ch[0]]["circuit"] for ch in gang[it["plan_id"]] if ch] or [f"{pre}{k}"]
+                    it["circuit"] = gc[0]
+                    if len(set(gc)) > 1:
+                        it["gang_circuits"] = gc
 
 
 
@@ -610,7 +1072,8 @@ def validate(items: list, rec: dict, sch: dict | None = None, units=None) -> lis
     in_door 落在门洞里或门扇开启范围里（门后；开关的门后归 switch_reach）、blocked 被高家具挡住（点位离家具某一块不到 block_gap、
     高度又和这一块重叠；灯、给排水点不查）、outside_room 出房间、in_wall 压墙、overlap 和同一间房里另一个点位叠在一起（平面外框
     重叠、高度也重叠）、socket_count 插座少于规则表的 min、switch_reach 房门开关离锁舌边超过 switch_reach 或在门扇开启范围里、
-    near_shower 插座离淋浴、浴缸不到 shower_clear、circuit_over 一路超过上限。units：只查这几户的点位、插座数和回路。"""
+    near_shower 插座离淋浴、浴缸不到 shower_clear、circuit_over 一路超过上限、circuit_gang 一联开关接的灯不在同一路或开关这一联
+    和灯不同路。units：只查这几户的点位、插座数和回路。"""
     E = _env(rec, dict(sch or {}, items=items))
     by, tol = E["by"], LIMITS["tolerance_mm2"]
     wet = {k for k, _ in group("wet")}
@@ -665,6 +1128,34 @@ def validate(items: list, rec: dict, sch: dict | None = None, units=None) -> lis
             for f in rm["furn"]:
                 if f["key"] in wet and (d := furnish.footprint(f).distance(p)) < LIMITS["shower_clear"]:
                     add(rm, name, "near_shower", d, "mm", f"离{f['name']}只有 {d:.0f}，不到 {LIMITS['shower_clear']}", f.get("plan_id") or f["name"])
+    C = LIMITS["ceiling_lights"]
+    for it in pts:   # 筒灯、灯带（只在有吊顶的方案里有）
+        t, rm = point_type(it), by.get(it["room"])
+        if t not in GROUPED or rm is None:
+            continue
+        name, bl, p = it["plan_id"], E["ceil"].get(it["room"], []), Point(it["x"], it["y"])
+        g = lambda parts: unary_union([Polygon(b["polygon"], b.get("holes") or []) for b in bl if b["part"] in parts])
+        if t == "strip":
+            d = LineString(it.get("path") or [(it["x"], it["y"])] * 2).difference(g(("灯槽",)).buffer(1)).length
+            if d > 1:
+                add(rm, name, "ceiling_light", d, "mm", f"灯带有 {d:.0f} 不在灯槽里")
+            continue
+        cur, R = g(("窗帘盒",)), Polygon([w["a"] for w in rm["walls"]]).buffer(0)
+        others = [o for o in pts if o["room"] == it["room"] and kind_of(o) == "light" and point_type(o) not in GROUPED]
+        if not any(Polygon(b["polygon"], b.get("holes") or []).buffer(-C["radius"]).contains(p) for b in bl if b["part"] != "窗帘盒"):
+            add(rm, name, "ceiling_light", 0, "mm", "不在一块吊顶里，或压到跌级线（灯边离吊顶块的边不到半个灯宽）")
+        elif (d := R.exterior.distance(p)) < C["wall_min"]:
+            add(rm, name, "ceiling_light", d, "mm", f"离墙 {d:.0f}，不到 {C['wall_min']}")
+        elif not cur.is_empty and (d := cur.distance(p)) < C["curtain_clear"]:
+            add(rm, name, "ceiling_light", d, "mm", f"离窗帘盒 {d:.0f}，不到 {C['curtain_clear']}")
+        elif (o := next((o for o in others if Point(o["x"], o["y"]).distance(p) < C["light_clear"]), None)):
+            d = Point(o["x"], o["y"]).distance(p)
+            add(rm, name, "ceiling_light", d, "mm", f"离{o['name']} {d:.0f}，不到 {C['light_clear']}", o.get("plan_id") or o["name"])
+    downs = [it for it in pts if point_type(it) == "downlight" and it["room"] in by]
+    for i, it in enumerate(downs):   # 两盏筒灯中心距不到 spacing_min
+        for o in downs[:i]:
+            if o["room"] == it["room"] and (d := math.hypot(it["x"] - o["x"], it["y"] - o["y"])) < C["spacing_min"]:
+                add(by[it["room"]], it["plan_id"], "ceiling_light", d, "mm", f"离{o['plan_id']} 中心距 {d:.0f}，不到 {C['spacing_min']}", o["plan_id"])
     for rm in E["rooms"]:
         need = room_rules(rm["type"]).get("min", {}).get("socket") if not units or rm["unit"] in units else None
         have = sum(1 for it in pts if it["room"] == rm["id"] and kind_of(it) == "socket")
@@ -681,6 +1172,20 @@ def validate(items: list, rec: dict, sch: dict | None = None, units=None) -> lis
         if c.get("max") and n > c["max"]:
             out.append({"room": "", "room_id": "", "item": cid, "check": "circuit_over", "value": n, "unit": "个", "with": unit or None,
                         "msg": f"{cid}：{unit + ' ' if unit else ''}这一路 {n} 个，超过 {c['max']}"})
+    pid = {it["plan_id"]: it for it in pts if it.get("plan_id")}
+    for it in pts:   # 一联开关只能断一路：这一联接的整串灯同一路，开关这一联也在这一路
+        if not it.get("controls") or not it.get("circuit") or it.get("plan_id") is None:
+            continue
+        gcs = it.get("gang_circuits") or [it["circuit"]] * len(it["controls"])
+        for h, gc in zip(it["controls"], gcs):
+            chain, cur = [], h
+            while cur in pid and cur not in chain:
+                chain.append(cur)
+                cur = pid[cur].get("next")
+            cs = sorted({pid[x].get("circuit") or "" for x in chain})
+            if chain and cs != [gc]:
+                add(by.get(it["room"]), it["plan_id"], "circuit_gang", len(chain), "个",
+                    f"这一联（{h} 起的 {len(chain)} 盏）在 {'、'.join(cs)}，开关这一联在 {gc}：一联只能断一路", h)
     order = {c: i for i, c in enumerate(CHECKS)}
     return sorted(out, key=lambda v: (v["room_id"], v["item"], order[v["check"]], str(v["with"])))
 
@@ -694,6 +1199,9 @@ def mep(rec: dict, sch: dict, intent: dict | None = None, units=None) -> tuple[d
     keep = [it for it in sch.get("items", []) if point_type(it) is None or (units and unit.get(it["room"]) not in units)]
     items, errors, skipped = place(rec, dict(sch, items=keep), intent, units)
     out = dict(sch, items=keep + items)
+    if sch.get("ceilings"):   # 有吊顶时灯的高度跟吊顶走（ceiling.adjust_lights，只改高度、不改位置）
+        from . import ceiling
+        out["items"] = ceiling.adjust_lights(out)
     viol = validate(out["items"], rec, out, units)
     circuits = {}
     for it in items:

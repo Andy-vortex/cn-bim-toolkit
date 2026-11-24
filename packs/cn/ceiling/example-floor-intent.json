@@ -1,0 +1,5 @@
+{"rooms": [
+ {"room": "R005", "width": 500},
+ {"room": "R008", "ceiling": "平顶", "drop": 80, "curtain": true},
+ {"room": "R001", "ceiling": "原顶"}
+]}

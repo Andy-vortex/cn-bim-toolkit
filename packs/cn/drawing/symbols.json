@@ -1,5 +1,5 @@
 {
-  "_说明": "中国家装平面符号库 v0.1。坐标单位 mm，局部坐标：原点在构件定位点，x 沿墙向右，y 垂直于墙指向室内。图形参照 GB/T 50786-2012《建筑电气制图标准》、GB/T 50106-2010《建筑给水排水制图标准》的常用画法简化而成，未逐条对照原文，待专业人员复核。items 支持 polyline（点列）、circle（cx, cy, r）、arc（cx, cy, r, 起始角, 终止角，单位度）、ellipse（cx, cy, rx, ry）。paper_scale：符号类点位（插座、开关、吸顶灯、筒灯、地漏、紧急呼叫、监控、强弱电箱、给排水点）在任何比例下都按 1:paper_scale 时的纸面大小画（出图时换成 Bonsai 的 SYMBOL 标注，见 drawset.add_view）；没有这一项的（洁具、家具、扶手）按实际尺寸画。字母（K、TV、TD、L、R、P、LEB）是折线画的，带 letter 标记（true）：跟着符号转，转到会倒着读时换成字母正过来的变体（symbols.VARIANTS 的 _u），镜像时只挪位置、不镜像。排水点的圆圈偏开画、带一条短线指回实际位置（台盆、水槽下的排水点和冷热水点挨着）。system：给排水点归哪个系统（plan2ifc 建 IfcDistributionSystem）。psets：类型上另写的属性集。",
+  "_说明": "中国家装平面符号库 v0.1。坐标单位 mm，局部坐标：原点在构件定位点，x 沿墙向右，y 垂直于墙指向室内。图形参照 GB/T 50786-2012《建筑电气制图标准》、GB/T 50106-2010《建筑给水排水制图标准》的常用画法简化而成，未逐条对照原文，待专业人员复核。items 支持 polyline（点列）、circle（cx, cy, r）、arc（cx, cy, r, 起始角, 终止角，单位度）、ellipse（cx, cy, rx, ry）。paper_scale：符号类点位（插座、开关、吸顶灯、筒灯、地漏、紧急呼叫、监控、强弱电箱、给排水点）在任何比例下都按 1:paper_scale 时的纸面大小画（出图时换成 Bonsai 的 SYMBOL 标注，见 drawset.add_view）；没有这一项的（洁具、家具、扶手）按实际尺寸画。字母（K、TV、TD、L、R、P、LEB）是折线画的，带 letter 标记（true）：跟着符号转，转到会倒着读时换成字母正过来的变体（symbols.VARIANTS 的 _u），镜像时只挪位置、不镜像。排水点的圆圈偏开画、带一条短线指回实际位置（台盆、水槽下的排水点和冷热水点挨着）。system：给排水点归哪个系统（plan2ifc 建 IfcDistributionSystem）。psets：类型上另写的属性集。on_demand：只在方案用到时才建 IFC 类型（多联双控开关只在有吊顶、门口合成多联面板时用到）。",
   "types": {
     "cn_socket": {
       "ifc_type": "IfcOutletType", "predefined": "POWEROUTLET", "name": "五孔插座",
@@ -62,6 +62,16 @@
       "items": [
         {"circle": [0, 0, 75]},
         {"circle": [0, 0, 30]}
+      ]
+    },
+    "cn_light_strip": {
+      "ifc_type": "IfcLightFixtureType", "predefined": "NOTDEFINED", "name": "灯带",
+      "legend": "暗藏灯带（沿灯槽）", "default_height": 2650, "body": [100, 20, 20], "body_centered": true, "views": [],
+      "items": [
+        {"polyline": [[-300, 0], [-200, 0]]},
+        {"polyline": [[-120, 0], [-20, 0]]},
+        {"polyline": [[60, 0], [160, 0]]},
+        {"polyline": [[240, 0], [300, 0]]}
       ]
     },
     "cn_toilet": {
@@ -184,6 +194,32 @@
         {"polyline": [[-141, 9], [141, 291]]},
         {"polyline": [[141, 291], [186, 246]]},
         {"polyline": [[-141, 9], [-186, 54]]}
+      ]
+    },
+    "cn_switch_2way_2": {
+      "ifc_type": "IfcSwitchingDeviceType", "predefined": "TOGGLESWITCH", "name": "双联双控开关", "legend": "双联双控开关", "default_height": 1300, "body": [86, 30, 86], "on_demand": true,
+      "views": ["PLAN_VIEW"], "paper_scale": 50, "psets": {"Pset_SwitchingDeviceTypeToggleSwitch": {"SwitchFunction": "DOUBLETHROWSWITCH", "NumberOfGangs": 2}},
+      "items": [
+        {"circle": [0, 150, 55]},
+        {"polyline": [[-141, 9], [141, 291]]},
+        {"polyline": [[141, 291], [186, 246]]},
+        {"polyline": [[101, 251], [146, 206]]},
+        {"polyline": [[-141, 9], [-186, 54]]},
+        {"polyline": [[-101, 49], [-146, 94]]}
+      ]
+    },
+    "cn_switch_2way_3": {
+      "ifc_type": "IfcSwitchingDeviceType", "predefined": "TOGGLESWITCH", "name": "三联双控开关", "legend": "三联双控开关", "default_height": 1300, "body": [86, 30, 86], "on_demand": true,
+      "views": ["PLAN_VIEW"], "paper_scale": 50, "psets": {"Pset_SwitchingDeviceTypeToggleSwitch": {"SwitchFunction": "DOUBLETHROWSWITCH", "NumberOfGangs": 3}},
+      "items": [
+        {"circle": [0, 150, 55]},
+        {"polyline": [[-141, 9], [141, 291]]},
+        {"polyline": [[141, 291], [186, 246]]},
+        {"polyline": [[101, 251], [146, 206]]},
+        {"polyline": [[61, 211], [106, 166]]},
+        {"polyline": [[-141, 9], [-186, 54]]},
+        {"polyline": [[-101, 49], [-146, 94]]},
+        {"polyline": [[-61, 89], [-106, 134]]}
       ]
     },
     "cn_switch_3": {

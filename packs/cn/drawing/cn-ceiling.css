@@ -1,0 +1,12 @@
+/* 顶面布置图（make_plan_set --kinds ceiling）追加的样式：吊顶造型线、跌级线（吊顶块的投影边）用细实线画清楚；
+   平面图上吊顶是淡灰的投影线（cn.css），只有顶面布置图接这一份 */
+.IfcCovering, .IfcCovering path { stroke: black; stroke-width: 0.25; }
+
+/* 灯带：沿灯槽的虚线（annotate.light_strips） */
+.jz-strip { stroke: #000; stroke-width: 0.25; stroke-dasharray: 1.2, 0.8; fill: none; }
+
+/* 吊顶标注引线端头的实心小圆点，落在所属的那块吊顶里（annotate.ceiling_marks） */
+.jz-leaddot { fill: #000; stroke: none; }
+
+/* 铝扣板吊顶的板缝网格（annotate.alu_grid），遇到灯具符号和字断开 */
+.jz-alugrid { stroke: #000; stroke-width: 0.1; fill: none; }
