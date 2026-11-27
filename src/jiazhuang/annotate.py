@@ -20,6 +20,7 @@
 字母的小字用 num 档），尺寸排布参数从约定包
 conventions.json 读（conventions.py）。改了 Blender 曲线/网格的标注（尺寸、轴号圈和引线、尺寸界线、折断线、标高线）
 都用 Bonsai 的 Update Representation 写回 IFC（commit），保存后的 IFC 重新打开能原样重出图。
+标注函数按视图坐标 (x, y, z) 写：平面类视图就是模型坐标；立面视图先登记视图坐标系（set_frame），同一套函数照样用。
 """
 from __future__ import annotations
 
@@ -98,10 +99,10 @@ def _dim_points(vals):
     return vs
 
 
-def _dim_room(a, b, den):
-    """a～b（米）这一段里写得下自己的数字（数字宽 + 两头各 0.5mm，至少 5.2mm）：写不下的是"小段"，数字另放（dim_chain_smart）。"""
+def _dim_room(a, b, den, pad_mm=0.5):
+    """a～b（米）这一段里写得下自己的数字（数字宽 + 两头各 pad_mm，至少 5.2mm）：写不下的是"小段"，数字另放（dim_chain_smart）。"""
     P = lambda mm: mm * den / 1000.0
-    return (b - a) >= max(P(text_mm(str(int(round((b - a) * 1000.0))), DIM_FONT_MM)) + 2 * P(0.5), P(5.2))
+    return (b - a) >= max(P(text_mm(str(int(round((b - a) * 1000.0))), DIM_FONT_MM)) + 2 * P(pad_mm), P(5.2))
 # 尺寸排布（约定包 conventions.json 的 dimensions，图纸毫米）：第一道尺寸离图样最外轮廓、平行尺寸线间距
 # （GB/T 50001-2017 第 11.3 节，最内一道不宜小于 10mm，间距宜为 7～10mm）；最外一道到轴号圈；轴号圈半径；
 # 尺寸界线离开图样轮廓、超出最外一道尺寸线的长度；角上数字最多伸出建筑边多少（相邻一侧第一道尺寸的数字从 10-1-2.9≈6mm 处开始）
@@ -124,6 +125,29 @@ _LEVEL: dict[int, list] = {}    # 视图 id → 楼面标高的外框（米）�
 _GROUPS: dict[int, list] = {}   # 视图 id → [(房间轮廓, 房名组的外框)]（米）：引出的房名不贴着别的房名组写
 _RESERVE: dict[int, list] = {}  # 视图 id → [(房名组的外框, 房间轮廓)]（米）：小房间、交通空间预留的房名位置，只对门窗编号生效（space_labels reserve）
 _WIRES: dict[int, list] = {}   # 视图 id → 开关连线（米，线两侧各 WIRE_CLEAR_MM 的范围）：后放的字不压它（_obstacles）
+_FRAME: dict[int, Matrix] = {}  # 视图 id → 视图坐标系（4×4，米）；平面类视图不登记，就是单位阵（set_frame）
+
+
+def set_frame(drawing, matrix) -> None:
+    """登记一个视图的坐标系：之后本视图新建的标注（尺寸、线、字、引出线、填充、标高）都按视图坐标 (x, y, z) 写几何，
+    对象的放置 = 这个矩阵 × 对象在视图里的放置。立面的坐标系是 x 沿墙从左到右、y 向上、z 朝室内，原点在墙面左端楼面处
+    （elevation.frame）：同一套按平面写的标注函数在立面上原样能用。字的朝向也按这个矩阵写全（不留 core.add_annotation 给的
+    "对着当前相机"的朝向，否则立面上的字会转两次）。平面类视图不登记，走原来的写法，图面逐字节不变。"""
+    _FRAME[drawing.id()] = Matrix(matrix)
+
+
+def _base(drawing) -> Matrix:
+    """新建标注对象的放置：视图坐标系（set_frame 登记过的），没登记是单位阵。"""
+    m = _FRAME.get(drawing.id())
+    return Matrix.Identity(4) if m is None else m.copy()
+
+
+def _sync_placement(drawing, obj) -> None:
+    """登记了坐标系的视图：对象的放置写回 IFC（保存的 IFC 重开重出和当次出图一样）。平面类视图不调。"""
+    if drawing.id() in _FRAME:
+        import bonsai.core.geometry as core_geometry
+        bpy.context.view_layer.update()
+        core_geometry.edit_object_placement(tool.Ifc, tool.Geometry, tool.Surveyor, obj=obj)
 
 
 def _den_of(drawing) -> int:
@@ -227,12 +251,13 @@ def _paper(mm, den):
 # ---------------------------------------------------------------- Bonsai 标注对象
 def dim_chain(drawing, pts, z=0.0, object_type="DIMENSION"):
     obj = core.add_annotation(tool.Ifc, tool.Collector, tool.Drawing, drawing=drawing, object_type=object_type, relating_type=None)
-    obj.matrix_world = Matrix.Identity(4)
+    obj.matrix_world = _base(drawing)
     sp = obj.data.splines[0]
     if len(sp.points) < len(pts):
         sp.points.add(len(pts) - len(sp.points))
     for p, (x, y) in zip(sp.points, pts):
         p.co = (x, y, z, 1.0)
+    _sync_placement(drawing, obj)
     commit(obj)
     return obj
 
@@ -255,11 +280,12 @@ def polyline(drawing, pts, z=0.0, object_type="LINEWORK", classes=None):
     """一条线（Bonsai 的 LINEWORK / BREAKLINE 标注是网格对象：写顶点和边），点为米。
     classes：加到 SVG 上的样式类（Bonsai 读 EPset_Annotation.Classes），样式写在约定包的 cn.css 里。"""
     obj = core.add_annotation(tool.Ifc, tool.Collector, tool.Drawing, drawing=drawing, object_type=object_type, relating_type=None)
-    obj.matrix_world = Matrix.Identity(4)
+    obj.matrix_world = _base(drawing)
     me = obj.data
     me.clear_geometry()
     me.from_pydata([(x, y, z) for x, y in pts], [(i, i + 1) for i in range(len(pts) - 1)], [])
     me.update()
+    _sync_placement(drawing, obj)
     commit(obj)
     if classes:
         f = tool.Ifc.get()
@@ -268,33 +294,43 @@ def polyline(drawing, pts, z=0.0, object_type="LINEWORK", classes=None):
     return obj
 
 
-def text(drawing, x, y, literal, size=2.5, z=0.0, align="center", rot=0.0, register=True, box_literal=None):
+def text(drawing, x, y, literal, size=2.5, z=0.0, align="center", rot=0.0, register=True, box_literal=None, classes=None):
     """size：字号档（见 FONT_MM，实际大小由 cn.css 决定）。literal 里的 "\\n" 是换行。
     rot：逆时针转角（度），竖向文字用 90（从下往上读）。register：把文字外框登记到本视图的占位表，后放的编号会避开它；
     box_literal：估外框用的文字（内容是 {{Tag}} 这类变量时传实际文字）。"""
     obj = core.add_annotation(tool.Ifc, tool.Collector, tool.Drawing, drawing=drawing, object_type="TEXT", relating_type=None)
-    obj.location = (x, y, z)
-    if rot:
-        obj.rotation_euler = (0.0, 0.0, math.radians(rot))
+    if drawing.id() in _FRAME:   # 视图坐标系里的字：整个放置写全（转角为 0 时也写），不留"对着当前相机"的朝向
+        obj.matrix_world = _base(drawing) @ Matrix.Translation((x, y, z)) @ Matrix.Rotation(math.radians(rot), 4, "Z")
+        _sync_placement(drawing, obj)
+    else:
+        obj.location = (x, y, z)
+        if rot:
+            obj.rotation_euler = (0.0, 0.0, math.radians(rot))
     lit = tool.Drawing.get_text_literal(obj)
     lit.Literal = literal
     if hasattr(lit, "BoxAlignment"):
         lit.BoxAlignment = align
-    _apply_size(obj, size)
+    _apply_size(obj, size, classes)
     if register:
         _OCC.setdefault(drawing.id(), []).append(_text_box(box_literal or literal, size, _den_of(drawing), x, y, align, rot))
     return obj
 
 
-def _apply_size(obj, size):
+def _apply_size(obj, size, classes=None):
     """字号档写进 IFC 的 EPset_Annotation.Classes（Bonsai 出图时变成文字的样式类）：Bonsai 的五档用它的 edit_text_font_size，
-    NUM 不是 Bonsai 的档，直接写类名（cn.css 的 text.num）。"""
+    NUM 不是 Bonsai 的档，直接写类名（cn.css 的 text.num）；另给了 classes 时一并附在类名后。"""
     if size == NUM:
         f, el = tool.Ifc.get(), tool.Ifc.get_entity(obj)
         ps = tool.Pset.get_element_pset(el, "EPset_Annotation") or api.pset.add_pset(f, product=el, name="EPset_Annotation")
-        api.pset.edit_pset(f, pset=ps, properties={"Classes": NUM})
-    elif size != 2.5:
-        tool.Drawing.edit_text_font_size(obj, size)
+        api.pset.edit_pset(f, pset=ps, properties={"Classes": f"{NUM} {classes}" if classes else NUM})
+    else:
+        if size != 2.5:
+            tool.Drawing.edit_text_font_size(obj, size)
+        if classes:
+            f, el = tool.Ifc.get(), tool.Ifc.get_entity(obj)
+            ps = tool.Pset.get_element_pset(el, "EPset_Annotation") or api.pset.add_pset(f, product=el, name="EPset_Annotation")
+            cur = (uel.get_pset(el, "EPset_Annotation") or {}).get("Classes") or ""
+            api.pset.edit_pset(f, pset=ps, properties={"Classes": f"{cur} {classes}".strip()})
 
 
 def _no_text(obj):
@@ -340,7 +376,9 @@ def _dim_plan(drawing, vals, fixed, horizontal, den, leaders=(), neighbor=(), li
     W = [P(text_mm(t, DIM_FONT_MM)) for t in texts]
     m = P(0.5)
     rcp = _is_rcp(drawing) and drawing.id() not in RCP_OWN_TEXT   # 示例户型的顶面图（JZ-03）全部交给 Bonsai
-    room = [_dim_room(a, b, den) for a, b in segs]
+    elev = drawing.id() in _FRAME
+    room_pad, tick_pad = (0.85, 0.85) if elev else (0.5, 0.3)
+    room = [_dim_room(a, b, den, room_pad) for a, b in segs]
     # Bonsai 把数字居中写；居中位置压到轴号引线的（总尺寸常见）也改成自己放
     clear = [not any((a + b) / 2 - W[i] / 2 - P(0.3) < q < (a + b) / 2 + W[i] / 2 + P(0.3) for q in leaders)
              and not any((a + b) / 2 - W[i] / 2 < q1 and (a + b) / 2 + W[i] / 2 > q0 for q0, q1 in blocked.get(0, ()))
@@ -371,7 +409,7 @@ def _dim_plan(drawing, vals, fixed, horizontal, den, leaders=(), neighbor=(), li
         if x0 < lo_lim or x1 > hi_lim:
             return False
         if any((x0 < q[1] + P(0.3) and x1 > q[0] - P(0.3)) if isinstance(q, tuple)
-               else (q not in ends and x0 - P(pm if q in lead else 0.3) < q < x1 + P(pm if q in lead else 0.3)) for q in forb[row]):
+               else (q not in ends and x0 - P(pm if q in lead else tick_pad) < q < x1 + P(pm if q in lead else tick_pad)) for q in forb[row]):
             return False
         if any(x0 < q1 and x1 > q0 for q0, q1 in same):   # 同值的数字在另一排正上方或正下方：读不出各是哪段的
             return False
@@ -951,7 +989,7 @@ NAMED_PEN_MM = 10.0             # 引出的房名写在别的有名字的房间�
 SMALL_ROOM_M2 = 5.5   # 只写名字的小房间（卫生间、管井等，space_labels）；门的编号尽量写在门外（走道一侧），房间里留给房名（opening_tags）
 # _label 的档位（见 _label）；EARLY 之前的几档放不下时（房间里每种写法都要压线），单行的名字先试从房外引出（_label_leader），
 # 再往后退
-TIER_CLEAN, TIER_NEAR, TIER_LIGHT, TIER_TIGHT, TIER_ZERO, TIER_COVER, TIER_TOUCH, TIER_SPILL = range(8)
+TIER_CLEAN, TIER_NEAR, TIER_EXACT, TIER_LIGHT, TIER_TIGHT, TIER_ZERO, TIER_COVER, TIER_TOUCH, TIER_SPILL = range(9)
 EARLY = TIER_COVER
 
 
@@ -1144,14 +1182,18 @@ def _rooms(geo):
 def _label_obstacles(f, drawing):
     """房间名要避开的图形（米）：(墙、门窗洞口和平开门扫过的扇形、按纸面大小画的点位符号（paper_shapes，排在最后）, STRtree,
     本视图画出的家具、洁具、设备和按实际尺寸画的点位的轮廓 [(轮廓, 是否大件)], STRtree, 墙的合并轮廓, 第一项里墙有几个（后面
-    的是门窗、开启范围和纸面符号）, 平面几何, 第一项里纸面符号有几个)。"""
+    的是门窗、开启范围和纸面符号）, 平面几何, 第一项里纸面符号有几个, 同第三项但按家具实际轮廓（soft_shapes exact，L 形橱柜、
+    转角沙发的内角不算；本视图没有这种家具时为 None）)。"""
     hard, _, _ = _obstacles(f, drawing)
     syms = paper_shapes(f, drawing)
     hard = hard + syms
     soft = soft_shapes(f, drawing, paper=False)
+    soft_x = soft_shapes(f, drawing, paper=False, exact=True)
+    if all(abs(a.area - b.area) <= 1e-12 for (a, _), (b, _) in zip(soft, soft_x)):
+        soft_x = None
     geo = plan_geometry(f)
     return (hard, shapely.STRtree(hard), soft, (shapely.STRtree([p for p, _ in soft]) if soft else None), geo.wall_union,
-            len(geo.wall_polys), geo, len(syms))
+            len(geo.wall_polys), geo, len(syms), soft_x)
 
 
 def _label(drawing, den, region, center, variants, obs, z=0.0, skip_tiny=False, what="", line_gap=False, start=0, stop=None, clip=None,
@@ -1162,6 +1204,8 @@ def _label(drawing, den, region, center, variants, obs, z=0.0, skip_tiny=False, 
                   和左右同一行的字隔开 SAME_LINE_MM、和上下相邻的横排字（门窗编号等）隔开一行 ROW_MM，见 _row_box；
                   和楼面标高上下隔开 LEVEL_ROW_MM）；
       TIER_NEAR   同上，上下相邻的字只隔开 LABEL_GAP_MM（line_gap=True 时才有这一档）；
+      TIER_EXACT  前两档再试一遍，家具设备按实际轮廓算（soft_shapes exact：L 形橱柜、转角沙发的内角是空地；前两档按二维
+                  符号的外框算，内角也挡着）；房里没有这种家具时没有这一档；
       TIER_LIGHT  可以压大件家具的轮廓（床、沙发、楼梯，记日志 room label over furniture）；line_gap=True 时先找和上下相邻
                   的横排字隔一行的位置；
       TIER_TIGHT  什么都不压，空隙收紧到 TIGHT_GAP_MM（离墙仍留 WALL_GAP_MM；记日志 room label tight）；
@@ -1182,14 +1226,16 @@ def _label(drawing, den, region, center, variants, obs, z=0.0, skip_tiny=False, 
     last = TIER_SPILL + 1 if stop is None else stop
     pick = None
     if region is not None and not region.is_empty:
-        hard, hard_tree, soft, soft_tree, walls, nwall, _, nsym = obs
+        hard, hard_tree, soft, soft_tree, walls, nwall, _, nsym, soft_x = obs
         idx = hard_tree.query(region)
         near_h = [hard[i] for i in idx]
         near_w, near_o = [hard[i] for i in idx if i < nwall], [hard[i] for i in idx if i >= nwall]   # 墙；门窗、开启范围和纸面符号
         wx, wa, wb = (P(v) for v in WALL_GAP_MM)   # 墙往下外扩 wa（挡住它下面的字的字顶），往上外扩 wb
         w_tight = _grow(near_w, 0.0, max(0.0, wa - P(TIGHT_GAP_MM)), 0.0)   # 再外扩 TIGHT_GAP_MM 后字顶离上面的墙够 wa
         w_zero = _grow(near_w, wx, wa, wb)
-        near_s = [soft[i] for i in soft_tree.query(region)] if soft_tree is not None else []
+        si = soft_tree.query(region) if soft_tree is not None else []
+        near_s = [soft[i] for i in si]
+        all_x = [soft_x[i][0] for i in si] if soft_x and any(abs(soft_x[i][0].area - soft[i][0].area) > 1e-12 for i in si) else None
         occ = [o for o in _OCC.get(drawing.id(), []) if o.intersects(region.buffer(P(max(SAME_LINE_MM, ROW_MM))))]
         occ_x = [_same_line(o, P(SAME_LINE_MM - LABEL_GAP_MM)) for o in occ] if line_gap else occ
         occ_r = [_row_box(o, P(SAME_LINE_MM - LABEL_GAP_MM), P(ROW_MM - LABEL_GAP_MM), P(2.0)) for o in occ] if line_gap else occ
@@ -1203,15 +1249,16 @@ def _label(drawing, den, region, center, variants, obs, z=0.0, skip_tiny=False, 
         # 档位：(离障碍的空隙, 几组障碍（依次试，压大件家具的那档先找和上下的横排字隔一行的位置）, 家具设备怎么算)：None 当障碍
         # （已在障碍里或不算）；"least" 取压得最少的位置；"zero" 只要压的面积不到 ZERO_COVER_MM2 的位置（线宽之内，看不出压线）
         light = [near_h + small_s + occ_r, near_h + small_s + occ_x] if line_gap else [near_h + small_s + occ_x]
-        tiers = [(gap, [near_h + all_s + occ_r], None), (gap, [near_h + all_s + occ_x], None), (gap, light, None),
+        exact = ([near_h + all_x + occ_r, near_h + all_x + occ_x] if line_gap else [near_h + all_x + occ_x]) if all_x else []
+        tiers = [(gap, [near_h + all_s + occ_r], None), (gap, [near_h + all_s + occ_x], None), (gap, exact, None), (gap, light, None),
                  (P(TIGHT_GAP_MM), [w_tight + near_o + all_s + occ], None),
                  (0.0, [w_zero + near_o + occ_t], "zero"),
                  (gap, [near_h + occ], "least"), (0.0, [near_h + occ], "least")]
         for tier in range(start, min(last, len(tiers))):
             g, obs_list, soft_as = tiers[tier]
-            if (tier == TIER_NEAR and not line_gap) or (tier == TIER_LIGHT and len(small_s) == len(near_s)) \
+            if (tier == TIER_NEAR and not line_gap) or (tier == TIER_EXACT and not exact) or (tier == TIER_LIGHT and len(small_s) == len(near_s)) \
                     or (tier == TIER_COVER and not near_s) or (tier == TIER_TOUCH and PAPER_SHIFT):   # 水电图不贴墙写（字墨会压到墙）
-                continue   # 和上一档一样
+                continue   # 和上一档一样（TIER_EXACT：家具的实际轮廓和外框一样）
             cover = [(shapely.union_all(all_s), 1.0)] if soft_as and near_s else None
             for ob in obs_list:
                 free, best = _free_region(region, ob, g), None
@@ -1264,7 +1311,7 @@ def _label(drawing, den, region, center, variants, obs, z=0.0, skip_tiny=False, 
     if dry:   # 只找位置（space_labels reserve）：返回整组字的外框
         return _box(x + min(r[0] for r in rs), y + min(r[1] for r in rs), x + max(r[2] for r in rs), y + max(r[3] for r in rs))
     if pick[3] != TIER_CLEAN:
-        log("room label " + {TIER_NEAR: "next to text", TIER_LIGHT: "over furniture", TIER_TIGHT: "tight", TIER_ZERO: "tight",
+        log("room label " + {TIER_NEAR: "next to text", TIER_EXACT: "by furniture outline", TIER_LIGHT: "over furniture", TIER_TIGHT: "tight", TIER_ZERO: "tight",
                              TIER_COVER: "over furniture", TIER_TOUCH: "touching", TIER_SPILL: "spills"}.get(pick[3], "crowded"),
             what, drawing.Name)
     for lit, size, dx, dy, _ in st:
@@ -1289,7 +1336,7 @@ def _label_leader(drawing, den, region, center, lit, size, obs, allowed, z=0.0, 
     P = lambda mm: mm * den / 1000.0
     if region is None or region.is_empty:
         return False
-    hard, hard_tree, soft, soft_tree, _, nwall, geo, nsym = obs
+    hard, hard_tree, soft, soft_tree, _, nwall, geo, nsym, _ = obs
     tw, th = P(text_mm(lit, FONT_MM[size])), P(0.9 * FONT_MM[size])
     near_s = [soft[i][0] for i in soft_tree.query(region)] if soft_tree is not None else []
     near_s += [hard[i] for i in hard_tree.query(region) if i >= len(hard) - nsym]   # 圆点也不落在纸面符号上
@@ -1513,8 +1560,10 @@ def point_heights(f, drawing, den, defaults=None, bbox_m=None, z=0.0, classes=sy
     分区图的裁切框）。位置按图纸毫米找（_height_spots）：紧贴自己的符号，字框离符号 1～4mm，沿墙方向（符号两侧）优先，
     其次室内一侧、斜角；不压墙、门窗和开启范围、家具洁具和点位符号、已写的字，离自己的符号比离别的点位符号近 1mm 以上。
     都放不下时字写在附近同一房间的空地上，用一条短引出线（Bonsai 的 TEXT_LEADER）指向符号（记日志 height leader）。
+    家具都按二维符号的外框算（_soft_outline），L 形橱柜、转角沙发的内角也算家具；这两步放不下、本视图又有这种家具时，家具改按
+    实际轮廓（exact_tree）再试一遍紧贴和引出（引线不穿门扇）；前两步放得下的不受影响。
     merge：同一面墙上挨着的同类点位（同一 IFC 类、高度相同、沿墙相距不到 MERGE_MM 图纸毫米，一个挨一个连成串）只标第一个；
-    引出也放不下时，再放宽到 H_LEADER_FAR_MM，最后一档字可以压淡显的家具、洁具（仍不压墙、门窗、点位符号和字）
+    引出也放不下时，再放宽到 H_LEADER_FAR_MM（按实际轮廓的先试），最后一档字可以压淡显的家具、洁具（仍不压墙、门窗、点位符号和字）
     （水电图用；默认 False，现有各图不变）。返回标了几个。"""
     import ifcopenshell.util.placement as up
     P = lambda mm: mm * den / 1000.0
@@ -1531,6 +1580,15 @@ def point_heights(f, drawing, den, defaults=None, bbox_m=None, z=0.0, classes=sy
         if not _hard:
             _hard.append(shapely.STRtree(_obstacles(f, drawing)[0] + paper_shapes(f, drawing)))
         return _hard[0]
+    _exact = []
+
+    def exact_tree():   # 同 tree，家具按实际轮廓（soft_shapes exact：L 形家具的内角是空地）；本视图没有这种家具时为 None
+        if not _exact:
+            s0, sx = soft_shapes(f, drawing), soft_shapes(f, drawing, exact=True)
+            same = all(abs(a.area - b.area) <= 1e-12 for (a, _), (b, _) in zip(s0, sx))
+            _exact.append(None if same else shapely.STRtree(_obstacles(f, drawing)[0] + [p for p, _ in sx]
+                                                            + (paper_shapes(f, drawing) if merge else [])))
+        return _exact[0]
     occ = _OCC.setdefault(drawing.id(), [])
     allowed = _box(*bbox_m).buffer(-P(CUT_GAP_MM), join_style="mitre") if bbox_m else None   # 不贴着切口折断线
     def outline(e):   # 符号外框；没有几何、也没有二维符号的点位按放置点算 1mm 见方
@@ -1574,10 +1632,23 @@ def point_heights(f, drawing, den, defaults=None, bbox_m=None, z=0.0, classes=sy
                 return all(o.distance(b) > d_own + P(1.0) for o in others)
             u, nv = np.array([m[0][0], m[1][0]]), np.array([m[0][1], m[1][1]])   # 局部 x 沿墙，+y 指向室内
             sym_other = lambda sym=sym: [g for g in paper_shapes(f, drawing) if g is not sym]   # 水电图：引线不穿过别的点位符号（含地漏、排水点）
+
+            def exact(sym=sym, lit=lit, tw=tw, th=th, u=u, nv=nv):
+                """前两档放不下：家具按实际轮廓（exact_tree）再试紧贴、引出（引线不穿门扇），水电图再放宽到 H_LEADER_FAR_MM。"""
+                tx = exact_tree()
+                if tx is None:
+                    return False
+                sp = next((p for _, p in _height_spots(sym, u, nv, tw, th, den) if ok(p, tr=tx)), None)
+                if sp is not None:
+                    text(drawing, sp[0], sp[1], lit, size=NUM, z=z)
+                    return True
+                av = sym_other() if merge else ()
+                return _height_leader(f, drawing, den, sym, lit, tw, z, lambda p: ok(p, tr=tx), avoid=av, doors=True) or merge and \
+                    _height_leader(f, drawing, den, sym, lit, tw, z, lambda p: ok(p, others=(), tr=tx), rmax=H_LEADER_FAR_MM, avoid=av, doors=True)
             spot = next((p for _, p in _height_spots(sym, u, nv, tw, th, den) if ok(p)), None)
             if spot is not None:
                 text(drawing, spot[0], spot[1], lit, size=NUM, z=z)
-            elif cell is None or not (_height_leader(f, drawing, den, sym, lit, tw, z, ok, avoid=sym_other() if merge else ()) or merge and (
+            elif cell is None or not (_height_leader(f, drawing, den, sym, lit, tw, z, ok, avoid=sym_other() if merge else ()) or exact() or merge and (
                     _height_leader(f, drawing, den, sym, lit, tw, z, lambda p: ok(p, others=()), rmax=H_LEADER_FAR_MM, avoid=sym_other())
                     # 水电图：还放不下时字可以压淡显的家具、洁具（单独计数），仍不压墙、门窗、点位符号和字，引线连着
                     or _height_leader(f, drawing, den, sym, lit, tw, z, lambda p: ok(p, others=(), tr=hard_tree()), rmax=H_LEADER_FAR_MM,
@@ -1654,13 +1725,13 @@ def _merged_heights(f, pts, classes, defaults, s, P) -> set:
     return {k for k, *_, need in info if need and first[root(k)] != k}
 
 
-def _soft_outline(geo, e, paper=None):
-    """家具、洁具、点位在平面图上实际占的地方（米）：三维 Body 的投影并上类型的二维符号（_symbol_outline）；按纸面大小用
+def _soft_outline(geo, e, paper=None, exact=False):
+    """家具、洁具、点位在平面图上实际占的地方（米）：三维 Body 的投影并上类型的二维符号（_symbol_outline；exact 见那里）；按纸面大小用
     SYMBOL 画的点位（paper = (放大倍数, 比例分母, 视图 id)，见 paper_symbols）是图上符号的笔画（_paper_outline）。没有返回 None。"""
     if paper:
         return _paper_outline(e, *paper)
     p = geo.fp(e)
-    sym = _symbol_outline(e, geo.S)
+    sym = _symbol_outline(e, geo.S, exact)
     if sym is not None:
         p = sym if p is None else p.union(sym)
     return p
@@ -1685,13 +1756,15 @@ def _height_spots(sym, u, n, tw, th, den):
     return sorted(out, key=lambda t: t[0])
 
 
-def _height_leader(f, drawing, den, sym, lit, tw, z, ok, rmax=H_LEADER_MM[1], avoid=()):
+def _height_leader(f, drawing, den, sym, lit, tw, z, ok, rmax=H_LEADER_MM[1], avoid=(), doors=False):
     """H 值紧贴不下：字放在符号周围 H_LEADER_MM 内的空地上（ok 同 point_heights：和符号在同一块不隔墙的地方），
-    引线不穿墙、不穿过已写的字，由近到远取第一个；用 TEXT_LEADER 从字的一端引到符号外框。返回是否放上了。"""
+    引线不穿墙、不穿过已写的字，由近到远取第一个；用 TEXT_LEADER 从字的一端引到符号外框。doors=True：引线也不穿过平开门
+    扇扫过的地方（_swings）。返回是否放上了。"""
     P = lambda mm: mm * den / 1000.0
     geo = plan_geometry(f)
     c = np.array(sym.centroid.coords[0])
     occ = _OCC.setdefault(drawing.id(), [])
+    swing = _swings(f) if doors else None
     for r in np.arange(H_LEADER_MM[0], rmax, 0.5):
         for a in np.arange(0.0, 2 * math.pi, math.pi / 12):
             p = c + np.array([math.cos(a), math.sin(a)]) * P(r)
@@ -1708,6 +1781,8 @@ def _height_leader(f, drawing, den, sym, lit, tw, z, ok, rmax=H_LEADER_MM[1], av
             if geo.crosses_wall(line, WALL_TOUCH_M):
                 continue
             if any(o.intersects(line.buffer(P(0.3))) for o in occ) or any(o.intersects(line) for o in avoid):   # avoid：别的点位符号
+                continue
+            if swing is not None and swing.intersection(line).length > P(0.1):
                 continue
             _leader(drawing, path, lit, NUM, left, z)
             occ.append(_text_box(lit, NUM, den, *p))
@@ -2609,15 +2684,7 @@ def level_mark(f, drawing, den, levels, z=0.0, bbox_m=None, style="stack", dry=F
         log("level mark over furniture", drawing.Name, kind)
     x, y = spot
     yl = y + L                                                  # 标高线
-    obj = core.add_annotation(tool.Ifc, tool.Collector, tool.Drawing, drawing=drawing, object_type="PLAN_LEVEL", relating_type=None)
-    obj.matrix_world = Matrix.Identity(4)
-    sp = obj.data.splines[0]
-    for p, (px, py) in zip(sp.points, [(x, yl), (x + W, yl)]):
-        p.co = (px, py, z, 1.0)
-    commit(obj)
-    el = tool.Ifc.get_entity(obj)
-    el.Description = txt
-    _no_text(obj)
+    _level_line(drawing, x, yl, W, txt, z)
     occ.append(_box(x, y, x + W, y + H))
     _LEVEL.setdefault(drawing.id(), []).append(occ[-1])
     for i, lit in enumerate(up):
@@ -2626,6 +2693,35 @@ def level_mark(f, drawing, den, levels, z=0.0, bbox_m=None, style="stack", dry=F
     if at is not None:
         text(drawing, x + at[0], y + at[1], note, size=1.8, z=z, align="bottom-left", register=False)
     return 1 + len(up) + (kind != "stack")
+
+
+def _level_line(drawing, x, yl, W, txt, z=0.0):
+    """一条标高线（Bonsai 的 PLAN_LEVEL）：从 (x, yl) 到 (x + W, yl)，标高符号挂在右端下面，只写说明文字 txt。"""
+    obj = core.add_annotation(tool.Ifc, tool.Collector, tool.Drawing, drawing=drawing, object_type="PLAN_LEVEL", relating_type=None)
+    obj.matrix_world = _base(drawing)
+    sp = obj.data.splines[0]
+    for p, (px, py) in zip(sp.points, [(x, yl), (x + W, yl)]):
+        p.co = (px, py, z, 1.0)
+    _sync_placement(drawing, obj)
+    commit(obj)
+    el = tool.Ifc.get_entity(obj)
+    el.Description = txt
+    _no_text(obj)
+    return obj
+
+
+def level_at(drawing, x, v, value, den, z=0.0) -> float:
+    """竖直视图（立面）上的一个标高：标高符号的尖正对高度 v（米，视图坐标），尖在 x 处；标高线在符号上面往左伸，
+    数字写在线上（和 level_mark 同一个 PLAN_LEVEL、同一个符号和字号）。value：标高（米）。字组登记进占位表。
+    返回字组宽（米）。"""
+    P = lambda mm: mm * den / 1000.0
+    d = _level_layout([value], "stack", 1, den)
+    sym_w, sym_h = LEVEL_SYMBOL_MM
+    x1 = x + P(sym_w / 2)                 # 符号画在标高线右端下面，尖在符号中间
+    x0, yl = x1 - d["W"], v + P(sym_h)
+    _level_line(drawing, x0, yl, d["W"], d["txt"], z)
+    _OCC.setdefault(drawing.id(), []).append(_box(x0, v, x1, yl + P(1.0 + LEVEL_FONT_MM)))
+    return d["W"]
 
 
 # ---------------------------------------------------------------- 门窗编号
@@ -2646,13 +2742,15 @@ def _obstacles(f, drawing):
 
 
 _SYM_OUTLINE: dict[int, object] = {}
+_SYM_EXACT: dict[int, object] = {}
 SOFT_LIGHT = ("IfcFurniture", "IfcFurnishingElement", "IfcStair", "IfcStairFlight", "IfcRailing")   # 大件轮廓：字压上去还看得清
 
 
-def soft_shapes(f, drawing, paper=True):
+def soft_shapes(f, drawing, paper=True, exact=False):
     """本视图里家具、洁具、点位等"软障碍"在平面图上实际占的地方（米）：三维 Body 的投影，再并上类型的二维符号
     （Plan/Body，约定包 symbols.json 生成；呼叫按钮、插座的符号比盒子大得多）。返回 [(轮廓, 是否大件)]。
-    paper=False 时不含按纸面大小用 SYMBOL 画的点位（房间名、门窗编号把它们当硬障碍，见 paper_shapes）。"""
+    paper=False 时不含按纸面大小用 SYMBOL 画的点位（房间名、门窗编号把它们当硬障碍，见 paper_shapes）。
+    exact=True：二维符号按线围起来的地方算，不按外框（_symbol_outline），顺序同 exact=False。"""
     geo = plan_geometry(f)
     ids = view_element_ids(drawing)
     big = paper_symbols(drawing)
@@ -2661,7 +2759,7 @@ def soft_shapes(f, drawing, paper=True):
         for e in f.by_type(cls):
             if e.id() not in ids or (not paper and e.id() in big):
                 continue
-            p = _soft_outline(geo, e, big.get(e.id()))
+            p = _soft_outline(geo, e, big.get(e.id()), exact)
             if p is not None:
                 out.append((p, cls in SOFT_LIGHT))
     return out
@@ -2673,22 +2771,37 @@ def paper_shapes(f, drawing):
     return [p for e_id, v in paper_symbols(drawing).items() for p in [_paper_outline(f.by_id(e_id), *v)] if p is not None]
 
 
-def _symbol_outline(e, scale):
-    """构件类型的二维符号（Plan 上下文的 IfcPolyline）按构件放置变换后的外框（米）；没有返回 None。"""
-    if e.id() in _SYM_OUTLINE:
-        return _SYM_OUTLINE[e.id()]
+def _symbol_outline(e, scale, exact=False):
+    """构件类型的二维符号（Plan 上下文的 IfcPolyline）按构件放置变换后的外框（米）；没有返回 None。
+    exact=True：符号的线围起来的地方——线在交点处打断后连成的面合起来，所有的线都落在面里、面又比外框小 1% 以上时用它，否则同外框
+    （同一个对象）。L 形橱柜、转角沙发的外框把内角那块空地也包进去了，字、标高在那里找不到位置；只有房间名、点位高度在前几档
+    放不下时多试的那几档用它（_label 的 TIER_EXACT、point_heights），前几档放得下的不受影响。"""
+    cache = _SYM_EXACT if exact else _SYM_OUTLINE
+    if e.id() in cache:
+        return cache[e.id()]
     import ifcopenshell.util.placement as up
     t = uel.get_type(e)
-    pts = [p.Coordinates for m in ((t.RepresentationMaps or []) if t else ()) for r in [m.MappedRepresentation]
-           if getattr(r.ContextOfItems, "ContextType", "") == "Plan" for it in r.Items if it.is_a("IfcPolyline") for p in it.Points]
+    lines = [[(p.Coordinates[0], p.Coordinates[1]) for p in it.Points] for m in ((t.RepresentationMaps or []) if t else ())
+             for r in [m.MappedRepresentation] if getattr(r.ContextOfItems, "ContextType", "") == "Plan" for it in r.Items if it.is_a("IfcPolyline")]
     res = None
-    if pts:
+    if exact:
+        res = _symbol_outline(e, scale)
+        segs = [LineString(pl) for pl in lines if len(pl) >= 2]
+        if res is not None and segs:
+            faces = shapely.union_all(list(shapely.get_parts(shapely.polygonize(list(shapely.get_parts(shapely.union_all(segs)))))))
+            if not faces.is_empty and all(faces.buffer(0.001 / scale).covers(s) for s in segs):
+                m = up.get_local_placement(e.ObjectPlacement)
+                g = shapely.affinity.affine_transform(faces, [m[0][0] * scale, m[0][1] * scale, m[1][0] * scale, m[1][1] * scale,
+                                                              m[0][3] * scale, m[1][3] * scale])
+                res = g if g.area < 0.99 * res.area else res
+    elif any(lines):
+        pts = [p for pl in lines for p in pl]
         m = up.get_local_placement(e.ObjectPlacement)
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
         corners = [(x, y) for x in (min(xs), max(xs)) for y in (min(ys), max(ys))]
         res = shapely.MultiPoint([((m[0][0] * x + m[0][1] * y + m[0][3]) * scale, (m[1][0] * x + m[1][1] * y + m[1][3]) * scale)
                                   for x, y in corners]).convex_hull
-    _SYM_OUTLINE[e.id()] = res
+    cache[e.id()] = res
     return res
 
 
@@ -2712,6 +2825,7 @@ SHIFT_CLASS = "jz-shift"   # 挪开画的符号指回实际位置的引线（约
 LAYOUT_INK_MM = 0.15     # 排开时符号笔画两侧各算这么宽、圈起来的连里面（图纸毫米；和回归里"符号压符号"的量法同一个）
 LAYOUT_GAP_MM = 0.3      # 排开后相邻两个符号之间至少空这么多（图纸毫米）
 LAYOUT_MAX_MM = 8.0      # 一个符号最多挪这么远（图纸毫米；1:100 是 0.8m，约两个符号宽：再远读不出是哪一个点位，引线也太长）
+CORNER_OVERLAP_MM2 = 0.3   # 墙角两边的符号重叠超过这么多（图纸平方毫米，和回归"符号压符号"同一个门槛）才挪开（layout_paper 第三遍）
 SWITCH_SHIFT_MM = float(_DIMS["switch_shift_mm"])   # 压着顶面筒灯、排不开的开关最多挪这么远（约定包 conventions.json，只在有吊顶的方案里用到）
 _VIEW_POSE: dict[tuple, tuple] = {}   # (视图 id, 点位 id) → 排开后的摆法（带第三项沿墙挪开的距离）
 
@@ -2819,7 +2933,8 @@ def layout_paper(f, view, items, den):
     前面的障碍——地面上的点位（地漏、排水点，不挪）的符号、灯、平开门的洞口和开启范围、墙和房外——把墙线切成几段空段，每个
     符号归到放得下它、离它最近的空段（一段放不下时把两头的挪到别的空段），段内按单调最小二乘（_isotonic）求位置、再夹到
     空段里。挪动量超过 LAYOUT_MAX_MM 的那一段不按这样排；这些符号再一个一个按平面上的实际形状沿墙试（每 0.25mm，不超过
-    LAYOUT_MAX_MM），取最近的一处不压别的符号、障碍、不出房间的；还不行的保持原样（记日志 layout kept）。只沿所在的墙线
+    LAYOUT_MAX_MM），取最近的一处不压别的符号、障碍、不出房间的；还不行的保持原样（记日志 layout kept）。最后，墙角两边（不同
+    墙线上）互相压着的两个符号（重叠超过 CORNER_OVERLAP_MM2；开关除外），挪得少的那个照这样沿自己的墙挪开。只沿所在的墙线
     一维挪，不换墙。点位坐标不动：结果是这张图上的摆法（_VIEW_POSE，第三项是沿墙挪开的距离），drawset 给挪开的画引线。
     返回 (挪开的个数, 排不开的 [(房间名, [点位 Tag], 原因)])。"""
     import ifcopenshell.util.placement as up
@@ -3005,6 +3120,33 @@ def layout_paper(f, view, items, den):
                 pending.clear(); pending.update(snap[3]); lift.clear(); lift.update(snap[4])
             mem = best_[1]
         run(room_name, why, mem, u)
+    # 第三遍：墙角两边的符号互相压着（L 形橱柜转角两边各一个台面插座这类）：前两遍各排各的墙线，看不见拐角另一面墙上的符号。
+    # 不同墙线上两两重叠超过 CORNER_OVERLAP_MM2（和回归"符号压符号"同一个量法）的，两个里挪得少的那个沿自己的墙挪开（同第二遍的
+    # 试法：每 0.25mm 一试，离原位置不超过 LAYOUT_MAX_MM，不压别的符号、障碍，不出房间）；开关不在这一遍挪。没有这种情况的图不变
+    walled = sorted(i for i in base if info[i][3] is not None and not base[i][0].is_a("IfcSwitchingDevice"))
+    area_mm2 = lambda g: g.area * paper(1.0) ** 2
+
+    def slide(i):
+        """i 沿自己的墙挪开（总的沿墙距离，米）；挪不开返回 None。"""
+        u_ = info[i][1]
+        t0 = shift[i][0] * float(np.dot(shift[i][1], u_)) if i in shift else 0.0
+        sp = geo.space_at(shapely.Point(*(info[i][0] + info[i][2] * 0.1)))
+        room = geo.fp(sp).buffer(P(LAYOUT_INK_MM)) if sp is not None else None
+        others = shapely.union_all([obst] + [placed(j) for j in base if j != i])
+        bad = lambda g: area_mm2(g.intersection(others)) > 0.05 or (room is not None and area_mm2(g.difference(room)) > 0.05)
+        steps = sorted((t0 + P(s_ * 0.25) for s_ in range(-int(LAYOUT_MAX_MM * 8), int(LAYOUT_MAX_MM * 8) + 1) if s_), key=lambda v: (abs(v - t0), v))
+        return next((t for t in steps if abs(t) <= P(LAYOUT_MAX_MM) + 1e-9 and not bad(shapely.affinity.translate(base[i][3], *(u_ * t)))), None)
+    for a_ in walled:
+        for b_ in walled:
+            if b_ <= a_ or grp_of.get(a_) == grp_of.get(b_) or area_mm2(placed(a_).intersection(placed(b_))) <= CORNER_OVERLAP_MM2:
+                continue
+            cur = lambda k: shift[k][0] * float(np.dot(shift[k][1], info[k][1])) if k in shift else 0.0
+            cand = [(abs(t - cur(k)), k, t) for k in (a_, b_) for t in [slide(k)] if t is not None]
+            if cand:
+                _, k, t = min(cand)
+                shift[k] = (t, info[k][1])
+            else:
+                still.append((sp_name(f, info[a_][3][0]), [base[a_][0].Tag or str(a_), base[b_][0].Tag or str(b_)], "墙角两边的符号挪不开"))
     for i, (dd, u) in shift.items():
         pose = base[i][2]
         _VIEW_POSE[(view, i)] = (pose[0], pose[1], dd * float(np.dot(info[i][1], u)) / S)   # 沿点位自己的局部 x（项目长度单位）
@@ -3734,8 +3876,13 @@ def _leader(drawing, pts_xy, literal, size, first, z=0.0, rot=0.0):
     一样从下往上读）——Bonsai 按对象的旋转定字的方向，所以对象转 rot，线的点按对象坐标写。引线登记进本视图的占位表，后放的字
     （房间名、尺寸数字）不压它。返回标注对象。"""
     obj = core.add_annotation(tool.Ifc, tool.Collector, tool.Drawing, drawing=drawing, object_type="TEXT_LEADER", relating_type=None)
-    obj.matrix_world = Matrix.Rotation(math.radians(rot), 4, "Z")
-    inv = obj.matrix_world.inverted()
+    if drawing.id() in _FRAME:   # 视图坐标系里：放置 = 坐标系 × 转角，点按转角前的视图坐标写
+        rm = Matrix.Rotation(math.radians(rot), 4, "Z")
+        obj.matrix_world = _base(drawing) @ rm
+        inv = rm.inverted()
+    else:
+        obj.matrix_world = Matrix.Rotation(math.radians(rot), 4, "Z")
+        inv = obj.matrix_world.inverted()
     sp = obj.data.splines[0]
     bez = bool(sp.bezier_points)
     pts = sp.bezier_points if bez else sp.points
@@ -3746,6 +3893,7 @@ def _leader(drawing, pts_xy, literal, size, first, z=0.0, rot=0.0):
         p.co = (px, py, pz) if bez else (px, py, pz, 1.0)
         if bez:
             p.handle_left_type = p.handle_right_type = "VECTOR"
+    _sync_placement(drawing, obj)
     commit(obj)
     lit = tool.Drawing.get_text_literal(obj)
     lit.Literal = literal
@@ -4719,7 +4867,7 @@ def grid_of(material_name):
 def segments(drawing, segs, z=0.0, classes=None, name=None):
     """很多段互不相连的线画成一个 LINEWORK（网格对象：每段的点连成边，段与段之间不连）。segs：LineString 或点列（米）。"""
     obj = core.add_annotation(tool.Ifc, tool.Collector, tool.Drawing, drawing=drawing, object_type="LINEWORK", relating_type=None)
-    obj.matrix_world = Matrix.Identity(4)
+    obj.matrix_world = _base(drawing)
     verts, edges = [], []
     for s in segs:
         pts = list(s.coords) if hasattr(s, "coords") else list(s)
@@ -4730,6 +4878,7 @@ def segments(drawing, segs, z=0.0, classes=None, name=None):
     me.clear_geometry()
     me.from_pydata(verts, edges, [])
     me.update()
+    _sync_placement(drawing, obj)
     commit(obj)
     el = tool.Ifc.get_entity(obj)
     if name:
@@ -4743,11 +4892,12 @@ def segments(drawing, segs, z=0.0, classes=None, name=None):
 def fill_area(drawing, pts, z=0.0, classes=None, name=None):
     """一块填充（Bonsai 的 FILL_AREA 标注：网格对象，一个面），点为米；样式按 classes（门槛石的浅灰）。"""
     obj = core.add_annotation(tool.Ifc, tool.Collector, tool.Drawing, drawing=drawing, object_type="FILL_AREA", relating_type=None)
-    obj.matrix_world = Matrix.Identity(4)
+    obj.matrix_world = _base(drawing)
     me = obj.data
     me.clear_geometry()
     me.from_pydata([(x, y, z) for x, y in pts], [], [list(range(len(pts)))])
     me.update()
+    _sync_placement(drawing, obj)
     commit(obj)
     el = tool.Ifc.get_entity(obj)
     if name:

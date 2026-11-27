@@ -16,6 +16,8 @@ room_types.json（房名 → 标准类型）。摆放约定和约定包符号一
     "beside": "<id>", "side": "left|right", "gap": …          在另一件旁边、同一条靠墙线；left/right 是那件家具自己的左右
   墙边来自 room_context：沿房间轮廓逆时针 W1..Wn（从最南、再最西的角起），站在房内面朝这面墙，起点在右手边。
   参照的那件要写在前面。意图是确定性换算：不搜索、不打分，摆不了就给一行原因，agent 改意图重来。
+  唯一的例外是灶台避窗（arrange）：橱柜的灶台上方要装油烟机，按意图摆出来油烟机沿墙进了窗洞或离洞边太近时，换一种摆法
+  （对调、镜像、挪灶台、平移、换墙，按代价从小到大取第一个满足的），换不开就照意图摆、校验报 hob_window。
 """
 from __future__ import annotations
 
@@ -46,10 +48,13 @@ _FURN = _read("furniture.json")
 LIBRARY = _FURN["library"]           # Bonsai 自带家具库的文件名（GPL：只在运行时引用，不进仓库）
 TYPES = _FURN["types"]               # 键 → 库类型 {name, width, depth, height, back, use, …} 或参数化类型 {name, recipe, params, …}
 RULES = _FURN["rules"]               # 校验门槛
+SOURCES = _FURN["sources"]           # 规则的依据
 ROOM_TYPES = _read("room_types.json")["types"]
 DOOR_H = openings.DEFAULT_DOOR_H
 SLIVER = 120.0   # 房间轮廓上比这窄的凸条（门洞条）不算墙边
-CHECKS = ("outside_room", "in_wall", "collision", "door_swing", "door_front", "window_blocked", "aisle", "use_blocked")
+CHECKS = ("outside_room", "in_wall", "collision", "door_swing", "door_front", "window_blocked", "aisle", "use_blocked", "hob_window")
+ON_WALL = 50.0   # 家具靠墙边离墙线这么近算靠着这面墙（灶台避窗找灶台在哪面墙上）
+STEP = 10.0      # 灶台避窗里挪灶台、平移整件时一档挪多少（毫米）
 
 
 def library_path() -> str:
@@ -163,9 +168,13 @@ def _unjog(ring: list, holes: list) -> list:
 
 def _start_corner(w, poly) -> str:
     """墙边的起点在房间的哪个角：按外包的半宽、半高归一后从中心看过去（狭长房间的四个角也分得出 SW/SE/NE/NW）。"""
+    return _corner_at(w["a"], poly)
+
+
+def _corner_at(pt, poly) -> str:
     x0, y0, x1, y1 = poly.bounds
-    dx = (w["a"][0] - (x0 + x1) / 2) / max((x1 - x0) / 2, 1.0)
-    dy = (w["a"][1] - (y0 + y1) / 2) / max((y1 - y0) / 2, 1.0)
+    dx = (pt[0] - (x0 + x1) / 2) / max((x1 - x0) / 2, 1.0)
+    dy = (pt[1] - (y0 + y1) / 2) / max((y1 - y0) / 2, 1.0)
     ang = math.degrees(math.atan2(dy, dx)) % 360
     return ("E", "NE", "N", "NW", "W", "SW", "S", "SE")[int((ang + 22.5) // 45) % 8]
 
@@ -438,13 +447,55 @@ def _reach(free, seeds, target, w):
     return False
 
 
-def validate(items: list, rec: dict, sch: dict | None = None) -> list[dict]:
-    """家具（键在 furniture.json 里的 items）的几何校验 → 违规列表 [{room, room_id, item, check, value, unit, with, msg}]。
-    check：outside_room 出房间、in_wall 压墙、collision 互相碰撞（高度区间不重叠的不算，挂墙的按高度分层）、
-    door_swing 压门扇开启范围、door_front 门口留空（门洞两侧 door_front_mm 进深）、window_blocked 挡窗（顶高过窗台、又占了
-    窗前 window_front_mm 进深；窗台高识别结果没有时用 window_sill_mm）、aisle 从房门到使用面没有通道净宽、use_blocked 使用面
-    被别的家具、墙占了或伸出房间。"""
-    tol, low = RULES["tolerance_mm2"], RULES["block_below_mm"]
+def has_hob(key) -> bool:
+    """有灶台的家具：cn_ 橱柜（参数里有 hob）、库里写了 parts 的橱柜。"""
+    t = TYPES.get(key) or {}
+    return "hob" in t.get("params", {}) or "hob" in t.get("parts", [])
+
+
+def part_params(it) -> dict:
+    """算水槽、灶台位置用的参数：cn_ 类型是补齐缺省值以后的参数，库类型只有宽和进深（按画法的缺省位置）。"""
+    t = TYPES[it["key"]]
+    return resolve(it["key"], it.get("params")) if "recipe" in t else {"width": t["width"], "depth": t["depth"]}
+
+
+def _back_wall(it, rm):
+    """家具靠墙边贴着的墙边：靠墙边中点离墙线不超过 ON_WALL、投影落在墙边上、家具沿墙方向和墙边平行；墙角处取离得近的。
+    不靠墙返回 None。"""
+    p, u, _ = frame(it)
+    best = None
+    for W in rm["walls"]:
+        a = np.array(W["a"])
+        s, d = float((p - a) @ np.array(W["u"])), float((p - a) @ np.array(W["n"]))
+        if abs(float(u @ np.array(W["u"]))) > 0.99 and -1.0 <= s <= W["len"] + 1.0 and abs(d) <= ON_WALL and (best is None or abs(d) < best[1]):
+            best = (W, abs(d))
+    return best[0] if best else None
+
+
+def hob_windows(it, rm, ops) -> list:
+    """灶台上方的油烟机（rules.hood_width_mm 宽、对着灶台中线）沿墙进了窗洞、或离洞边不到 rules.hood_window_gap_mm 的窗：
+    [(窗, 灶台还要沿墙挪多少才离开, 灶台中线, 墙边, 洞口起止)]，都从墙边起点量。只看橱柜靠着的那面墙上的窗、只看沿墙的范围
+    （不看窗台、窗顶高低）；没有灶台、不靠墙的返回 []。"""
+    if not has_hob(it["key"]) or rm is None:
+        return []
+    W = _back_wall(it, rm)
+    if W is None:
+        return []
+    p, u, _ = frame(it)
+    s = float((p + u * furngen.part_x(part_params(it), "hob") - np.array(W["a"])) @ np.array(W["u"]))
+    half, gap = RULES["hood_width_mm"] / 2, RULES["hood_window_gap_mm"]
+    out = []
+    for o in ops:
+        if o["kind"] != "window" or (span := on_wall(W, o)) is None:
+            continue
+        lo, hi = span[0] - gap, span[1] + gap
+        if s + half > lo + 0.5 and s - half < hi - 0.5:
+            out.append((o, min(s + half - lo, hi - (s - half)), s, W, span))
+    return out
+
+
+def _vctx(rec, sch) -> dict:
+    """校验用的几何（validate 每次都要的，灶台避窗试摆法时只算一遍）：房间、墙、门（洞口和门扇）、窗前要留空的范围。"""
     rooms = {r["id"]: r for r in rooms_of(rec, sch)}
     rec2 = (sch or {}).get("after") or rec
     walls = unary_union([Polygon(w["polygon"]).buffer(0) for w in rec2["walls"] if len(w["polygon"]) >= 3])
@@ -461,6 +512,19 @@ def validate(items: list, rec: dict, sch: dict | None = None) -> list[dict]:
         return unary_union(out)
     wins = [(o, bay_front(o) if o.get("polygon") else unary_union(_door_fronts(openings.rec_frame(o), dep)),
              o["sill"] if o.get("sill") is not None else RULES["window_sill_mm"]) for o in rec2["openings"] if o["kind"] == "window"]
+    return {"rooms": rooms, "walls": walls, "doors": doors, "wins": wins, "ops": rec2["openings"]}
+
+
+def validate(items: list, rec: dict, sch: dict | None = None, ctx: dict | None = None) -> list[dict]:
+    """家具（键在 furniture.json 里的 items）的几何校验 → 违规列表 [{room, room_id, item, check, value, unit, with, msg}]。
+    check：outside_room 出房间、in_wall 压墙、collision 互相碰撞（高度区间不重叠的不算，挂墙的按高度分层）、
+    door_swing 压门扇开启范围、door_front 门口留空（门洞两侧 door_front_mm 进深）、window_blocked 挡窗（顶高过窗台、又占了
+    窗前 window_front_mm 进深；窗台高识别结果没有时用 window_sill_mm）、aisle 从房门到使用面没有通道净宽、use_blocked 使用面
+    被别的家具、墙占了或伸出房间、hob_window 灶台上方的油烟机沿墙进了窗洞或离洞边不到 hood_window_gap_mm（value 是灶台还要
+    挪多少）。ctx：_vctx 算好的几何（不给就现算）。"""
+    tol, low = RULES["tolerance_mm2"], RULES["block_below_mm"]
+    C = ctx or _vctx(rec, sch)
+    rooms, walls, doors, wins = C["rooms"], C["walls"], C["doors"], C["wins"]
     F = []
     for it in items:
         if it["key"] not in TYPES:
@@ -491,6 +555,12 @@ def validate(items: list, rec: dict, sch: dict | None = None) -> list[dict]:
             if (a := sum(x for x, _ in hit)) > tol:
                 top = max(z1 for x, z1 in hit if x > 0)
                 add(f, "window_blocked", a, "mm2", f"高 {top:.0f}，挡了窗 {o['id']}（窗台 {sill:.0f}）{m2(a)}", o["id"])
+        for o, need, s, W, (w0, w1) in hob_windows(f["it"], rm, C["ops"]):
+            hw, gap = RULES["hood_width_mm"], RULES["hood_window_gap_mm"]
+            rel = (f"进了窗 {o['id']} 的洞口（{w0:.0f}～{w1:.0f}）" if s + hw / 2 > w0 and s - hw / 2 < w1
+                   else f"离窗 {o['id']} 的洞边（{w0:.0f}～{w1:.0f}）不到 {gap:.0f}")
+            add(f, "hob_window", need, "mm", f"灶台中线在 {W['id']} 上 {s:.0f}，上方油烟机按 {hw:.0f} 宽占 {s - hw / 2:.0f}～{s + hw / 2:.0f}，"
+                f"{rel}，灶台还差 {need:.0f}", o["id"])
         if f["z0"] >= DOOR_H:
             continue
         for o, zs, fr in doors:
@@ -550,10 +620,163 @@ def validate(items: list, rec: dict, sch: dict | None = None) -> list[dict]:
     return sorted(out, key=lambda v: (v["room_id"], v["item"], order[v["check"]], str(v["with"])))
 
 
+# ---------------------------------------------------------------- 灶台避窗
+def _mm(v):
+    v = round(float(v), 1)
+    return int(v) if v.is_integer() else v
+
+
+def _corner_ok(it, rm) -> bool:
+    """L 形橱柜的转角段靠着墙：转角段外侧那条边（局部 x = ±width/2，从靠墙边到 return）整条落在房间轮廓上。一字形和别的家具都算行。"""
+    if "recipe" not in TYPES[it["key"]]:
+        return True
+    p = part_params(it)
+    ret = float(p.get("return") or 0)
+    if ret <= p["depth"]:
+        return True
+    x = p["width"] / 2 * (1.0 if p.get("side") == "right" else -1.0)
+    return to_world(it, LineString([(x, 0.0), (x, ret)])).difference(rm["poly"].exterior.buffer(2.0)).length < 1.0
+
+
+def _mirrored(p) -> dict:
+    """整件左右镜像的参数：水槽、灶台从另一端量，L 形转角翻到另一侧。"""
+    pos, w = furngen.positions(p), float(p["width"])
+    out = dict(p, sink=_mm(w - pos["sink"]), hob=_mm(w - pos["hob"]))
+    if float(p.get("return") or 0) > p["depth"]:
+        out["side"] = "left" if p.get("side") == "right" else "right"
+    return out
+
+
+def _swapped(p) -> dict:
+    pos = furngen.positions(p)
+    return dict(p, sink=_mm(pos["hob"]), hob=_mm(pos["sink"]))
+
+
+def _on(it, W, s, params=None) -> dict:
+    """把这件靠到墙边 W 上，中心离起点 s（摆法同意图的 wall）。"""
+    q = np.array(W["a"]) + np.array(W["u"]) * s
+    out = dict(it, x=round(float(q[0]), 1), y=round(float(q[1]), 1), rot=round(math.degrees(math.atan2(W["u"][1], W["u"][0])) % 360.0, 3) % 360.0)
+    if params is not None:
+        out["params"] = params
+    return out
+
+
+def _near(v0, lo, hi, extra=()) -> list:
+    """lo～hi 里离 v0 由近到远的候选：STEP 一档，另加 extra（正好离开窗的位置）；一样近的取小的。"""
+    vals = {round(v, 1) for v in extra if lo - 0.05 <= v <= hi + 0.05}
+    k = 0
+    while v0 - k * STEP >= lo - 0.05 or v0 + k * STEP <= hi + 0.05:
+        vals |= {round(v, 1) for v in (v0 - k * STEP, v0 + k * STEP) if lo - 0.05 <= v <= hi + 0.05}
+        k += 1
+    return sorted(vals, key=lambda v: (round(abs(v - v0), 1), v))
+
+
+def _candidates(it, rm, ops):
+    """灶台在窗前时换的摆法，按代价从小到大（见 arrange）：(做法, 说明, 换过的这件)。参数不合法的（furngen.check）不出。"""
+    W0, p = _back_wall(it, rm), part_params(it)
+    cn = "recipe" in TYPES[it["key"]]
+    w = float(p["width"])
+    corner = cn and float(p.get("return") or 0) > p["depth"]
+    half, gap = RULES["hood_width_mm"] / 2, RULES["hood_window_gap_mm"]
+    fr, fu, _ = frame(it)
+    a0, u0 = np.array(W0["a"]), np.array(W0["u"])
+    s0, sgn = float((fr - a0) @ u0), float(fu @ u0)   # 靠墙边中点在墙边上的位置；家具 +x 和墙边同向为 1
+    bounds = [e for o in ops if o["kind"] == "window" and (sp := on_wall(W0, o)) for e in (sp[0] - gap - half, sp[1] + gap + half)]
+
+    def legal(q):
+        try:
+            resolve(it["key"], q)
+            return True
+        except ValueError:
+            return False
+    parts = lambda q: f"水槽 {_mm(furngen.positions(q)['sink'])}、灶台 {_mm(furngen.positions(q)['hob'])}（从台面左端量）"
+    if cn:   # 1 同一个位置：对调、镜像
+        for code, text, q in (("swap", "水槽、灶台对调", _swapped(p)), ("mirror", "左右镜像" + ("（转角翻到另一侧）" if corner else ""), _mirrored(p))):
+            if legal(q):
+                yield code, f"{text}，{parts(q)}", dict(it, params=q)
+        pos, (lo, hi) = furngen.positions(p), furngen._run(p)   # 2 灶台沿台面挪，水槽不动
+        edges = [(e - s0) * sgn + w / 2 for e in bounds] + [pos["sink"] - 700, pos["sink"] + 700]
+        for v in _near(pos["hob"], lo + furngen.PART_HALF["hob"], hi - furngen.PART_HALF["hob"], edges):
+            q = dict(p, sink=_mm(pos["sink"]), hob=_mm(v))
+            if abs(v - pos["hob"]) > 0.05 and legal(q):
+                yield "hob", f"灶台沿台面从 {_mm(pos['hob'])} 挪到 {_mm(v)}（水槽不动）", dict(it, params=q)
+    if not corner:   # 3 整件沿墙平移（L 形的转角离不开墙角）
+        hx = sgn * furngen.part_x(p, "hob")
+        for s in _near(s0, w / 2, W0["len"] - w / 2, [e - hx for e in bounds]):
+            if abs(s - s0) > 0.05:
+                yield "slide", f"沿 {W0['id']} 平移 {s - s0:+.0f}", _shift(it, u0 * (s - s0))
+    c0 = fr + fu * (w / 2 if p.get("side") == "right" else -w / 2)   # L 形原来的转角在哪个墙角（靠墙边转角那一头）
+    tries = []
+    for W in rm["walls"]:   # 4 换一面墙
+        if W["id"] == W0["id"] or W["len"] < w - 0.5:
+            continue
+        if corner:   # 转角放墙角：先原来那一侧，再整件镜像到另一侧；水槽、灶台先照原样再对调
+            for q in (p, _mirrored(p)):
+                left = q["side"] != "right"
+                cp = np.array(W["a"] if left else W["b"], dtype=float)
+                where = f"转角在 {_corner_at(cp, rm['poly'])}"
+                s = w / 2 if left else W["len"] - w / 2
+                keep = float(np.linalg.norm(cp - c0)) < 1.0
+                tries += [(not keep, W, s, q, where), (not keep, W, s, _swapped(q), where + "，水槽、灶台对调")]
+        else:        # 一字形：靠起点、靠终点、居中；水槽、灶台照原样、对调、镜像
+            tries += [(False, W, s, q, where + extra) for s, where in ((w / 2, "靠起点"), (W["len"] - w / 2, "靠终点"), (W["len"] / 2, "居中"))
+                      for q, extra in ((p, ""),) + (((_swapped(p), "，水槽、灶台对调"), (_mirrored(p), "，左右镜像")) if cn else ())]
+    # L 形转角留在原来那个墙角的先试（换到这个墙角的另一面墙、两条腿换一下，占的地方差不多），再按墙边编号试别的墙角
+    for _, W, s, q, where in sorted(tries, key=lambda t: t[0]):
+        if not cn:
+            yield "wall", f"换到 {W['id']}（{where}）", _on(it, W, s)
+        elif legal(q):
+            yield "wall", f"换到 {W['id']}（{where}），{parts(q)}", _on(it, W, s, q)
+
+
+def _shift(it, d) -> dict:
+    return dict(it, x=round(float(it["x"] + d[0]), 1), y=round(float(it["y"] + d[1]), 1))
+
+
+def arrange(items: list, rec: dict, sch: dict | None = None, fixed=()) -> tuple[list, list]:
+    """灶台避窗（规则表 rules.hood_window_gap_mm、hood_width_mm，依据 sources.F1）：意图摆出来的橱柜，灶台上方的油烟机沿墙进了
+    窗洞或离洞边不到门槛（hob_windows）时，按代价从小到大换一种摆法，取第一个满足的：
+      1 同一个位置：水槽、灶台对调；整件左右镜像（L 形转角跟着翻到另一侧，转角段还要靠着墙）
+      2 灶台沿台面挪到最近的满足处，水槽不动（还在正面那一段上、离端头 350、和水槽隔 700）
+      3 整件沿墙平移，离原位置由近到远（只一字形：L 形的转角离不开墙角）
+      4 换一面墙：L 形转角放墙角，先试转角留在原来那个墙角（换到这个墙角的另一面墙，两条腿换一下，占的地方差不多），再按墙边
+        编号试别的墙角（先原来那一侧，再整件镜像到另一侧），水槽、灶台先照原样再对调；一字形按墙边编号，靠起点、靠终点、居中，
+        水槽、灶台照原样、对调、镜像
+    每一种都要参数合法（furngen.check）、灶台离开那面墙上所有的窗、这间房的家具校验（碰撞、挡门、通道……）不多出违规。
+    满足规则的一件都不动；都不行照意图摆（校验报 hob_window）。fixed：方案里原有的家具，当障碍、不挪。确定性：同样的输入
+    同样的结果。→ (items, 换过的 [{room, room_id, item, how, msg}]，how 是 swap、mirror、hob、slide、wall)。"""
+    ctx = _vctx(rec, sch)
+    rooms, ops = ctx["rooms"], ctx["ops"]
+    out, notes = list(items), []
+    vkey = lambda v: (v["item"], v["check"], str(v["with"]))
+    for i, it in enumerate(items):
+        rm = rooms.get(it.get("room"))
+        if it.get("key") not in TYPES or not (bad := hob_windows(it, rm, ops)):
+            continue
+        mates = [x for j, x in enumerate(out) if j != i and x.get("room") == it["room"]] + [x for x in fixed if x.get("room") == it["room"]]
+        viol = lambda c: {vkey(v) for v in validate(mates + [c], rec, sch, ctx) if v["check"] != "hob_window"}
+        base = viol(it)
+        for how, text, cand in _candidates(it, rm, ops):
+            if hob_windows(cand, rm, ops) or not _corner_ok(cand, rm) or not viol(cand) <= base:
+                continue
+            out[i] = cand
+            o, need, s, W, _ = max(bad, key=lambda b: b[1])
+            notes.append({"room": rm["name"], "room_id": rm["id"], "item": it.get("plan_id") or it["name"], "how": how,
+                          "msg": f"{it.get('plan_id') or it['name']}：灶台中线在 {W['id']} 上 {s:.0f}，油烟机离窗 {o['id']} 不够（差 {need:.0f}）→ {text}"})
+            break
+    return out, notes
+
+
 def furnish(rec: dict, sch: dict, intent: dict) -> tuple[dict, dict]:
-    """识别 + 方案 + 意图 → (带家具的方案, 校验报告)。方案里以前布置的家具（带 plan_id 的）先去掉再换成这次的。"""
+    """识别 + 方案 + 意图 → (带家具的方案, 校验报告)。方案里以前布置的家具（带 plan_id 的）先去掉再换成这次的；灶台在窗前的
+    橱柜先换摆法（arrange，报告的 arranged 写换了哪件、怎么换的，没换的不写这一项）。"""
     items, errors = solve(intent, rec, sch)
-    out = dict(sch, items=[it for it in sch.get("items", []) if "plan_id" not in it] + items)
+    keep = [it for it in sch.get("items", []) if "plan_id" not in it]
+    items, moved = arrange(items, rec, sch, fixed=[it for it in keep if it.get("key") in TYPES])
+    out = dict(sch, items=keep + items)
     viol = validate(out["items"], rec, out)
     counts = {c: n for c in CHECKS if (n := sum(v["check"] == c for v in viol))}
-    return out, {"ok": not errors and not viol, "items": len(items), "errors": errors, "violations": viol, "counts": counts}
+    rep = {"ok": not errors and not viol, "items": len(items), "errors": errors, "violations": viol, "counts": counts}
+    if moved:
+        rep["arranged"] = moved
+    return out, rep

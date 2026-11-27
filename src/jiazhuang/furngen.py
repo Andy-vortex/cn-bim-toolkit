@@ -143,6 +143,13 @@ def positions(p: dict) -> dict:
     return out
 
 
+def part_x(p: dict, part: str) -> float:
+    """部件（水槽、灶台、台盆）中心在家具局部 x 上的位置（靠墙边中点为原点，+x 是家具自己的右）：台面左端在 -width/2，
+    从那里量 positions。转角在右侧的画法先按左侧算再整体镜像，镜像以后部件也落在这里，所以左右两种转角是同一个式子；
+    水电布点（灶台背后的油烟机插座、水槽背后的给水点）和灶台避窗都用它，和画出来的位置一致。"""
+    return -float(p["width"]) / 2 + float(positions(p)[part])
+
+
 def check(spec: dict, p: dict) -> str:
     """参数之间的约束（范围在 furnish.resolve 里查过）：台面（L 形是正面一段）放得下、水槽、灶台、台盆要在台面上
     （不进转角段）、水槽和灶台不挤在一起。

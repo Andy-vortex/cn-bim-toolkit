@@ -1,13 +1,19 @@
 {
- "_说明": "家具布置支持的类型，见同目录 README。lib: 开头的从 Bonsai 家具库引进（库不进仓库），尺寸是事实数据（毫米）：width 沿墙宽、depth 进深、height 高；back 是库里哪一边靠墙（+y/-y/+x/-x，any 表示前后对称、朝向无所谓）；use 是使用面，局部坐标矩形 [x0, y0, x1, y1]（y=0 是靠墙边，+y 朝室内）；use_any 为 true 时有一块使用面可用就行；mount_z 是挂墙件的离地高度；height 是高；cn_ 类型靠墙一条更高的（如床头板）另写 back_height（高）和 back_depth（从靠墙边量的进深），挡窗、碰撞分开算；fixed 为 true 的是固定家具（1:200 及更小的总图照画）。cn_ 开头的按参数生成（recipe 是画法）：params 的数字参数写 [最小, 最大, 缺省]（缺省 null 表示由画法定：台盆居中，水槽、灶台分在两头），文字参数写可选值（第一个是缺省）；水槽、灶台、台盆位置从台面左端量；use 写 front（正面进深）或 sides（两侧宽）+ from（从靠墙边多远开始）。",
+ "_说明": "家具布置支持的类型，见同目录 README。lib: 开头的从 Bonsai 家具库引进（库不进仓库），尺寸是事实数据（毫米）：width 沿墙宽、depth 进深、height 高；back 是库里哪一边靠墙（+y/-y/+x/-x，any 表示前后对称、朝向无所谓）；use 是使用面，局部坐标矩形 [x0, y0, x1, y1]（y=0 是靠墙边，+y 朝室内）；use_any 为 true 时有一块使用面可用就行；mount_z 是挂墙件的离地高度；height 是高；cn_ 类型靠墙一条更高的（如床头板）另写 back_height（高）和 back_depth（从靠墙边量的进深），挡窗、碰撞分开算；fixed 为 true 的是固定家具（1:200 及更小的总图照画）。cn_ 开头的按参数生成（recipe 是画法）：params 的数字参数写 [最小, 最大, 缺省]（缺省 null 表示由画法定：台盆居中，水槽、灶台分在两头），文字参数写可选值（第一个是缺省）；水槽、灶台、台盆位置从台面左端量；use 写 front（正面进深）或 sides（两侧宽）+ from（从靠墙边多远开始）。库里的橱柜写 parts [\"sink\", \"hob\"]：没有位置参数，水槽、灶台按画法的缺省位置算（灶台避窗、水电点位用）。sources：依据（条文号或\"惯例\"\"推断\"、自拟概括、参数、可信度、状态）。rules：校验门槛；hood_width_mm、hood_window_gap_mm 是灶台避窗（油烟机按这么宽算，沿墙离窗洞边至少这么多；后者和水电约定包 checks.window_gap_mm 同值，墙上的点位离窗洞边也是 100）。",
  "library": "IFC4 Furniture Library.ifc",
+ "sources": {
+  "F1": {"ref": "惯例", "summary": "灶台上方要装油烟机，灶台不放在窗前：油烟机挡窗装不上，窗口进风吹灶火；水槽宜在窗前。油烟机宽按 900 算，沿墙的范围不进窗洞宽度、离洞边至少 100（窗框、窗套约 50～80 宽，再留一点）", "params": {"hood_width": 900, "window_gap": 100}, "level": "C", "status": "惯例（待原文核对）"}
+ },
  "rules": {
   "tolerance_mm2": 100,
   "block_below_mm": 1200,
   "aisle_mm": 800,
   "door_front_mm": 600,
   "window_sill_mm": 900,
-  "window_front_mm": 300
+  "window_front_mm": 300,
+  "hood_width_mm": 900,
+  "hood_window_gap_mm": 100,
+  "hood_src": "F1"
  },
  "types": {
   "lib:Generic 1-Seater Sofa": {"name": "单人沙发", "width": 900, "depth": 900, "height": 900, "back": "+y", "use": [[-450, 900, 450, 1300]]},
@@ -27,9 +33,9 @@
   "lib:Generic Small Desk": {"name": "书桌", "width": 1000, "depth": 600, "height": 730, "back": "+y", "use": [[-500, 600, 500, 1300]]},
   "lib:Generic Medium Desk": {"name": "书桌", "width": 1200, "depth": 700, "height": 750, "back": "+y", "use": [[-600, 700, 600, 1400]]},
   "lib:Generic Large Desk": {"name": "书桌", "width": 1500, "depth": 800, "height": 750, "back": "+y", "use": [[-750, 800, 750, 1500]]},
-  "lib:Neufert Small Kitchen Bench": {"name": "橱柜", "width": 1750, "depth": 600, "height": 850, "back": "any", "fixed": true, "use": [[-875, 600, 875, 1400]]},
-  "lib:Neufert Medium Kitchen Bench": {"name": "橱柜", "width": 1950, "depth": 600, "height": 850, "back": "any", "fixed": true, "use": [[-975, 600, 975, 1400]]},
-  "lib:Neufert Large Kitchen Bench": {"name": "橱柜", "width": 2200, "depth": 600, "height": 850, "back": "any", "fixed": true, "use": [[-1100, 600, 1100, 1400]]},
+  "lib:Neufert Small Kitchen Bench": {"name": "橱柜", "width": 1750, "depth": 600, "height": 850, "back": "any", "fixed": true, "parts": ["sink", "hob"], "use": [[-875, 600, 875, 1400]]},
+  "lib:Neufert Medium Kitchen Bench": {"name": "橱柜", "width": 1950, "depth": 600, "height": 850, "back": "any", "fixed": true, "parts": ["sink", "hob"], "use": [[-975, 600, 975, 1400]]},
+  "lib:Neufert Large Kitchen Bench": {"name": "橱柜", "width": 2200, "depth": 600, "height": 850, "back": "any", "fixed": true, "parts": ["sink", "hob"], "use": [[-1100, 600, 1100, 1400]]},
   "lib:Generic Medium Fridge Zone": {"name": "冰箱", "width": 900, "depth": 700, "height": 1900, "back": "any", "use": [[-450, 700, 450, 1300]]},
   "lib:Generic Toilet without Cistern": {"name": "坐便器", "width": 400, "depth": 530, "height": 400, "back": "+y", "use": [[-400, 530, 400, 1030]]},
   "lib:Neufert Toilet with Cistern": {"name": "坐便器", "width": 550, "depth": 650, "height": 770, "back": "+y", "use": [[-400, 650, 400, 1150]]},

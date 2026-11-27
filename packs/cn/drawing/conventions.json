@@ -1,61 +1,203 @@
 {
   "_说明": "国内出图约定（数据）：门窗编号代号和类别、默认高度和窗台高、入户门和电梯层门的判断词表、防火等级换算、尺寸排布、表格字号、图框和视图标题的尺寸字号、墙体图例名称。代码（src/jiazhuang/conventions.py）只读取，这里是唯一的一份；缺文件或缺某一项时直接报错。以 _ 开头的键是说明。数值为常用做法，未逐条对照规范原文，待专业复核。",
   "openings": {
-    "default_height_mm": {"door": 2100, "window": 1500, "bay": 1900},
-    "default_sill_mm": {"window": 900, "bay": 450},
+    "_default_height_mm": "识别结果和原图编号都没有高度时用的缺省高度。窗不直接用 window：缺省窗高的窗一律到同一个窗顶（缺省窗台 + 缺省窗高），窗高 = 窗顶 − 窗台，不小于 min_window_height_mm（推断：再矮就不成窗）；窗台是缺省窗台时就是 window，窗台 1500 的高窗是 900。凸窗的窗台一律缺省，高用 bay。来源都记默认值，门窗表注待实测。",
+    "default_height_mm": {
+      "door": 2100,
+      "window": 1500,
+      "bay": 1900
+    },
+    "default_sill_mm": {
+      "window": 900,
+      "bay": 450
+    },
+    "min_window_height_mm": 300,
     "high_window_sill_mm": 1500,
     "_categories": "门窗类别：代号、类别名、IFC 类；顺序就是门窗表里的顺序。",
     "categories": [
-      {"code": "FDM", "name": "入户门（防盗门）", "ifc": "IfcDoor"},
-      {"code": "M", "name": "平开门", "ifc": "IfcDoor"},
-      {"code": "SM", "name": "双扇平开门", "ifc": "IfcDoor"},
-      {"code": "TLM", "name": "推拉门", "ifc": "IfcDoor"},
-      {"code": "ZDM", "name": "折叠门", "ifc": "IfcDoor"},
-      {"code": "JLM", "name": "卷帘门", "ifc": "IfcDoor"},
-      {"code": "XZM", "name": "旋转门", "ifc": "IfcDoor"},
-      {"code": "MLC", "name": "门联窗", "ifc": "IfcDoor"},
-      {"code": "FM", "name": "防火门", "ifc": "IfcDoor"},
-      {"code": "C", "name": "窗", "ifc": "IfcWindow"},
-      {"code": "TC", "name": "凸窗", "ifc": "IfcWindow"}
+      {
+        "code": "FDM",
+        "name": "入户门（防盗门）",
+        "ifc": "IfcDoor"
+      },
+      {
+        "code": "M",
+        "name": "平开门",
+        "ifc": "IfcDoor"
+      },
+      {
+        "code": "SM",
+        "name": "双扇平开门",
+        "ifc": "IfcDoor"
+      },
+      {
+        "code": "TLM",
+        "name": "推拉门",
+        "ifc": "IfcDoor"
+      },
+      {
+        "code": "ZDM",
+        "name": "折叠门",
+        "ifc": "IfcDoor"
+      },
+      {
+        "code": "JLM",
+        "name": "卷帘门",
+        "ifc": "IfcDoor"
+      },
+      {
+        "code": "XZM",
+        "name": "旋转门",
+        "ifc": "IfcDoor"
+      },
+      {
+        "code": "MLC",
+        "name": "门联窗",
+        "ifc": "IfcDoor"
+      },
+      {
+        "code": "FM",
+        "name": "防火门",
+        "ifc": "IfcDoor"
+      },
+      {
+        "code": "C",
+        "name": "窗",
+        "ifc": "IfcWindow"
+      },
+      {
+        "code": "TC",
+        "name": "凸窗",
+        "ifc": "IfcWindow"
+      }
     ],
     "_roles": "特殊类别用哪个代号：普通门、窗、凸窗、防火门、入户门、门联窗。",
-    "roles": {"door": "M", "window": "C", "bay": "TC", "fire": "FM", "entrance": "FDM", "door_with_window": "MLC"},
+    "roles": {
+      "door": "M",
+      "window": "C",
+      "bay": "TC",
+      "fire": "FM",
+      "entrance": "FDM",
+      "door_with_window": "MLC"
+    },
     "_operation_category": "门的 IFC 开启方式（OperationType）→ 类别代号；没列出的按普通门。",
     "operation_category": {
-      "DOUBLE_DOOR_SINGLE_SWING": "SM", "DOUBLE_DOOR_DOUBLE_SWING": "SM",
-      "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_LEFT": "SM", "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_RIGHT": "SM",
-      "SLIDING_TO_LEFT": "TLM", "SLIDING_TO_RIGHT": "TLM", "DOUBLE_DOOR_SLIDING": "TLM",
-      "FOLDING_TO_LEFT": "ZDM", "FOLDING_TO_RIGHT": "ZDM", "DOUBLE_DOOR_FOLDING": "ZDM",
-      "ROLLINGUP": "JLM", "REVOLVING": "XZM"
+      "DOUBLE_DOOR_SINGLE_SWING": "SM",
+      "DOUBLE_DOOR_DOUBLE_SWING": "SM",
+      "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_LEFT": "SM",
+      "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_RIGHT": "SM",
+      "SLIDING_TO_LEFT": "TLM",
+      "SLIDING_TO_RIGHT": "TLM",
+      "DOUBLE_DOOR_SLIDING": "TLM",
+      "FOLDING_TO_LEFT": "ZDM",
+      "FOLDING_TO_RIGHT": "ZDM",
+      "DOUBLE_DOOR_FOLDING": "ZDM",
+      "ROLLINGUP": "JLM",
+      "REVOLVING": "XZM"
     },
     "operation_text": {
-      "SINGLE_SWING_LEFT": "单扇平开", "SINGLE_SWING_RIGHT": "单扇平开", "DOUBLE_SWING_LEFT": "单扇双向平开",
-      "DOUBLE_SWING_RIGHT": "单扇双向平开", "DOUBLE_DOOR_SINGLE_SWING": "双扇平开", "DOUBLE_DOOR_DOUBLE_SWING": "双扇双向平开",
-      "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_LEFT": "双扇平开", "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_RIGHT": "双扇平开",
-      "SLIDING_TO_LEFT": "推拉", "SLIDING_TO_RIGHT": "推拉", "DOUBLE_DOOR_SLIDING": "双扇推拉",
-      "FOLDING_TO_LEFT": "折叠", "FOLDING_TO_RIGHT": "折叠", "DOUBLE_DOOR_FOLDING": "折叠",
-      "REVOLVING": "旋转", "ROLLINGUP": "卷帘"
+      "SINGLE_SWING_LEFT": "单扇平开",
+      "SINGLE_SWING_RIGHT": "单扇平开",
+      "DOUBLE_SWING_LEFT": "单扇双向平开",
+      "DOUBLE_SWING_RIGHT": "单扇双向平开",
+      "DOUBLE_DOOR_SINGLE_SWING": "双扇平开",
+      "DOUBLE_DOOR_DOUBLE_SWING": "双扇双向平开",
+      "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_LEFT": "双扇平开",
+      "DOUBLE_DOOR_SINGLE_SWING_OPPOSITE_RIGHT": "双扇平开",
+      "SLIDING_TO_LEFT": "推拉",
+      "SLIDING_TO_RIGHT": "推拉",
+      "DOUBLE_DOOR_SLIDING": "双扇推拉",
+      "FOLDING_TO_LEFT": "折叠",
+      "FOLDING_TO_RIGHT": "折叠",
+      "DOUBLE_DOOR_FOLDING": "折叠",
+      "REVOLVING": "旋转",
+      "ROLLINGUP": "卷帘"
     },
     "_entrance": "入户门（只认平开门）：名称和两侧空间都不含 exclude_words，且满足其一：名称里有 name_words；在外墙上、户内一侧是 inner_room_words 的非公共空间；一侧是户内空间（JZ_Space.Unit 不为空）、另一侧是不属于任何户的公共交通空间（JZ_Space.Public，或用途含 public_room_words）。模型没有户的信息时不用最后一条。原图标了别的门类编号且尺寸对得上的，以原图为准；带防火等级的按防火门。",
     "entrance": {
-      "public_room_words": ["通道", "前室", "走廊", "走道", "过道", "楼梯", "电梯厅", "候梯厅", "公共", "大堂"],
-      "name_words": ["入户门", "户门", "防盗门"],
-      "inner_room_words": ["玄关", "门厅", "过厅"],
-      "exclude_words": ["阳台", "露台", "花园", "庭院", "平台", "后门", "单元门", "车库"]
+      "public_room_words": [
+        "通道",
+        "前室",
+        "走廊",
+        "走道",
+        "过道",
+        "楼梯",
+        "电梯厅",
+        "候梯厅",
+        "公共",
+        "大堂"
+      ],
+      "name_words": [
+        "入户门",
+        "户门",
+        "防盗门"
+      ],
+      "inner_room_words": [
+        "玄关",
+        "门厅",
+        "过厅"
+      ],
+      "exclude_words": [
+        "阳台",
+        "露台",
+        "花园",
+        "庭院",
+        "平台",
+        "后门",
+        "单元门",
+        "车库"
+      ]
     },
     "_elevator": "电梯层门：相邻空间是电梯（含 room_words、不含 room_exclude），或名称里有 name_words。电梯层门由电梯厂家配套，不编号、不进门窗表。",
     "elevator": {
-      "room_words": ["电梯", "客梯", "货梯", "消防梯"],
-      "room_exclude": ["厅", "前室", "机房"],
-      "name_words": ["电梯门", "层门"]
+      "room_words": [
+        "电梯",
+        "客梯",
+        "货梯",
+        "消防梯"
+      ],
+      "room_exclude": [
+        "厅",
+        "前室",
+        "机房"
+      ],
+      "name_words": [
+        "电梯门",
+        "层门"
+      ]
     },
     "_fire": "防火门：Pset_DoorCommon.FireRating 里认得出甲/乙/丙级或耐火时间才算。耐火时间（分钟）达到 grade_minutes 即为该级（GB 12955 的常用对应，待原文核对）；pending_words 表示要求防火、等级待定。",
-    "fire": {"grade_minutes": {"甲": 90, "乙": 60, "丙": 30}, "pending_words": ["待定", "待核"]},
-    "circulation_words": ["玄关", "门厅", "走道", "过道", "走廊", "通道", "前室", "楼梯", "电梯", "公共", "大堂"]
+    "fire": {
+      "grade_minutes": {
+        "甲": 90,
+        "乙": 60,
+        "丙": 30
+      },
+      "pending_words": [
+        "待定",
+        "待核"
+      ]
+    },
+    "circulation_words": [
+      "玄关",
+      "门厅",
+      "走道",
+      "过道",
+      "走廊",
+      "通道",
+      "前室",
+      "楼梯",
+      "电梯",
+      "公共",
+      "大堂"
+    ]
   },
   "dimensions": {
     "_说明": "第一道尺寸离图样最外轮廓、平行尺寸线间距（GB/T 50001-2017 第 11.3 节：最内一道不宜小于 10mm，间距宜为 7～10mm）；最外一道到轴号圈、轴号圈半径、尺寸界线离开轮廓和超出尺寸线的长度、角上数字最多伸出建筑边多少；单位都是图纸毫米。reach_m：轴线端点离某一侧外墙面不超过这么多（米）算伸到这一侧。",
-    "chain_mm": [10.0, 7.0],
+    "chain_mm": [
+      10.0,
+      7.0
+    ],
     "bubble_gap_mm": 4.0,
     "bubble_r_mm": 4.0,
     "ext_gap_mm": 2.0,
@@ -91,7 +233,10 @@
   },
   "titleblock": {
     "_说明": "图框和视图标题（图纸毫米）：tools/make_titleblock.py 按它生成模板，drawset 出图时按它定可放图区域、标题栏折行、视图标题下粗线，两处读同一份；尺寸写整数毫米。图纸幅面；左侧装订边、其余三边留边；右侧竖向标题栏宽，格内文字左右各留 pad_mm；字号只有两档（small：标签、工程名称、比例、日期、视图标题的比例；big：图名、图号、视图标题的图名）；工程名称、图名两格最多折几行；视图标题图名和比例之间的间隔。",
-    "sheet_mm": [420, 297],
+    "sheet_mm": [
+      420,
+      297
+    ],
     "binding_mm": 25,
     "margin_mm": 5,
     "width_mm": 40,
@@ -101,6 +246,35 @@
     "project_lines": 4,
     "title_lines": 2,
     "view_title_gap_mm": 3
+  },
+  "elevation": {
+    "_说明": "室内立面（src/jiazhuang/elevation.py，make_plan_set --kinds elev）。scale：比例分母，1:50（GB/T 50104 不复杂的立面 1:100～1:50，待原文核对）。cols、rows：一张图纸最多几列、几行视图（多面墙房间单独成张，墙数不超过 share_max_walls 的房间合并排在 2×2 图纸上），gap_mm：视图之间至少隔多少（图纸毫米）。near_mm：本房间里离这面墙线不超过这么多（毫米，平面轮廓）的家具、洁具、电器、壁灯、点位才画进这面墙的立面（推断：和墙面规则 W13 的贴墙门槛同一个数；柜体、插座贴着墙，房间中间的桌子不画）。side_mm：两侧阴角剖到实墙时露出多少（毫米；阳角或无实墙剖到时不外伸）。below_mm：楼面完成面以下画到多深（毫米，地面面层是一道细线）。depth_gap_mm：相机（剖切面）离对面墙面多远（毫米）。margins_mm：模型四周给标注留的纸面宽度 [左（标高）, 右（竖向尺寸）, 下（两道横向尺寸）, 上（材料引出标注）]（图纸毫米）；level_gap_mm：标高符号的尖离模型左边多远（图纸毫米）。callout_r_mm：平面图内视符号圆半径（图纸毫米，直径 8mm，JGJ/T 244-2011 第 3.6 节 8～10mm，待原文核对）；callout_tip_mm：方向三角伸出圆周的高；callout_gap_mm：字母离三角尖的留白。point_merge_mm：立面同一高度、沿墙相距不超过这么多的点位合标一个距地高度字（毫米，推断）；point_gap_mm：高度字离点位方块外框的距离；point_leader_mm：紧贴放不下时引出线最大长度（图纸毫米）。joint_gap_mm：墙砖缝在文字、引线和点位方块处断开的留白（图纸毫米）；mat_offset_mm：墙面材料引出标注中心在原顶线以上的位置（图纸毫米）；skirting_leader_mm：踢脚线引出标注的引线长度上限（图纸毫米）。titleblock：立面图纸的图框（不画指北针；约定包里没有时用 A3-CN）。",
+    "scale": 50,
+    "cols": 2,
+    "rows": 2,
+    "gap_mm": 6,
+    "near_mm": 120,
+    "side_mm": 120,
+    "below_mm": 50,
+    "depth_gap_mm": 30,
+    "margins_mm": [
+      16,
+      18,
+      24,
+      14
+    ],
+    "level_gap_mm": 3.5,
+    "titleblock": "A3-CN-TABLE",
+    "callout_r_mm": 4.0,
+    "callout_tip_mm": 1.8,
+    "callout_gap_mm": 0.6,
+    "point_merge_mm": 400,
+    "point_gap_mm": 1.2,
+    "point_leader_mm": 12.0,
+    "joint_gap_mm": 0.5,
+    "mat_offset_mm": 5.5,
+    "skirting_leader_mm": 16.0,
+    "share_max_walls": 2
   },
   "walls": {
     "_说明": "墙体图例：墙的材质名 → 图例名称，顺序就是图例里的顺序；色块的颜色和填充只在 cn.css 里定义（.cut.material-cnbearing 等）。承重是按墙厚和外墙推断的，拆墙风险的提示挂在这一行上。",

@@ -18,11 +18,16 @@
   door: room | entrance, gap       房门（有入户门就是入户门）或入户门锁舌一侧的墙上，离门洞边 gap（开关放不下再放宽到
                                    switch_gap_max）；墙垛实物上放不下面板（面板宽 + 100）才放到拐角另一面墙上，再不行放门外那间
   wall: free, prefer, count, fill  沿墙找一段空墙（避开门窗、高家具、已有的点位，插座另避开淋浴、浴缸）；prefer 是 long（缺省）
-                                   或 window（有窗的墙）；fill 补到这类房间规则表 min 的个数
+        over, clear                或 window（有窗的墙）；fill 补到这类房间规则表 min 的个数；over（家具）只在这件家具台面上方的
+                                   墙段里找（_over_spans：正面一段和 L 形转角段靠着的墙，离水槽、灶台、台盆的边至少 clear），
+                                   放不下就少放、记进 skipped，不放到没有台面的墙上
   ceiling: center                  房间顶面中心（房名标注点）
 家具写规则表 furniture 里的组名（bed、sink……）或 furniture.json 的键。规则另可带 z（换高度）、if（组名：房里有这类家具才布，
 !组名：没有才布）、controls（开关控制哪些灯：main 主灯，lights 本房的灯）。插座（家具旁、背后、台面上、空墙）都避开淋浴、浴缸
 shower_clear 以内，单写一侧的换另一侧。规则表里没有的户内房间不布点，在 skipped 里记一行。
+墙上装的点位（checks.wall_types）不压窗：盒子的高度和窗台～窗顶（openings.rec_extent，和建模、墙面同一套）重叠时，沿墙离窗洞边
+至少 window_gap_mm。家具旁、背后、台面上的点位压窗时顺着墙挪到最近的允许位置（_slide），离原位置不超过 window_slide_mm；挪不下
+走原来的退路（换另一侧、不放）。家具旁的专用插座（冰箱这类）两侧都放不下时退到它服务的那件家具背后正中，那件家具不算挡着它。
 
 意图（可选，处理个例；只增删，不写坐标）：
   {"rooms": [{"room": 房名或房间 id, "add": [{"point": 点位类型, 锚点…, "z"?: …}], "remove": [点位类型或 plan_id]}]}
@@ -52,15 +57,17 @@ with open(conventions.pack_file("symbols.json"), encoding="utf-8") as _fh:
 
 ANCHORS = ("beside", "behind", "on", "above", "floor", "door", "wall", "ceiling")
 OPTS = {"beside": ("side", "gap"), "behind": ("dx",), "on": ("count", "clear"), "above": (), "floor": ("at", "inset", "dy"),
-        "door": ("gap",), "wall": ("prefer", "count", "fill"), "ceiling": ()}
+        "door": ("gap",), "wall": ("prefer", "count", "fill", "over", "clear"), "ceiling": ()}
 ASK_KEYS = ("point", "z", "controls")   # 意图里每条另认的字段（规则表另有 if、src）
 PARTS = ("sink", "hob", "basin")
-CHECKS = ("in_door", "blocked", "outside_room", "in_wall", "overlap", "socket_count", "switch_reach", "near_shower", "circuit_over",
-          "ceiling_light", "circuit_gang")
+CHECKS = ("in_door", "in_window", "blocked", "outside_room", "in_wall", "overlap", "socket_count", "switch_reach", "near_shower",
+          "circuit_over", "ceiling_light", "circuit_gang")
 CEIL_ANCHORS = ("ring", "slot", "axis")   # 跟吊顶走的灯（筒灯、灯带）的锚点：方案里没有吊顶块时一个都不放、也不记 skipped
 GROUPED = ("downlight", "strip")          # 成组控制的灯：同一组连成一串，开关只接这一组的第一盏
 NO_BLOCK = ("light", "cold", "hot", "drain", "floor_drain")   # 灯、给排水点就是要在家具上方、背后，不查挡没挡
 DOOR_H = openings.DEFAULT_DOOR_H
+ON_WALL_MM = 50     # 点位插入点离墙线这么近算装在这面墙上（数一面墙上已有的点位、查压窗都用它）
+SLIDE_STEP = 10     # 压窗的点位顺着墙找位置的步长（毫米）
 # 手写的点位（没有 plan_id）按符号认类别：数插座、免查遮挡用
 SYMBOL_KIND = {}
 for _t in POINTS.values():
@@ -120,10 +127,30 @@ def _parts(it) -> list:
     return [(furnish.to_world(it, p), it["z"], it["z"] + h) for p, h in furnish.geom(it["key"], it.get("params"))["parts"]]
 
 
-def _blocked(rm, p, z, h):
-    """贴着点位（不到 block_gap）、高度又和点位重叠的家具块：(家具, 顶高)；没有返回 None。"""
-    return next(((f, top) for f in rm["furn"] for part, z0, top in _parts(f)
+def _blocked(rm, p, z, h, own=()):
+    """贴着点位（不到 block_gap）、高度又和点位重叠的家具块：(家具, 顶高)；没有返回 None。own 里的家具不算（专用插座服务的
+    那件电器，_own）。"""
+    skip = {id(f) for f in own}
+    return next(((f, top) for f in rm["furn"] if id(f) not in skip for part, z0, top in _parts(f)
                  if top > z and z0 < z + h and part.distance(p) < LIMITS["block_gap"]), None)
+
+
+def _own(rm, t, pos) -> list:
+    """专用插座（kind dedicated）在它服务的电器背后时的那件家具：规则表这类房间里这种点位锚到（beside、behind）的家具里，
+    点位落在它靠墙边上、宽度以内的。布点时退到电器背后的就是这种，挡不挡不查它（点位就是给它用的），校验也不报。"""
+    if t not in POINTS or POINTS[t]["kind"] != "dedicated":
+        return []
+    keys = {k for r in room_rules(rm["type"]).get("rules", []) if r.get("point") == t
+            for a in ("beside", "behind") if a in r for k, _ in group(r[a])}
+    out = []
+    for f in rm["furn"]:
+        if f["key"] not in keys:
+            continue
+        p, u, n = furnish.frame(f)
+        d = np.asarray(pos, dtype=float) - p
+        if abs(float(d @ u)) <= furnish.geom(f["key"], f.get("params"))["width"] / 2 + 0.5 and -ON_WALL_MM <= float(d @ n) <= 0.5:
+            out.append(f)
+    return out
 
 
 # ---------------------------------------------------------------- 房间
@@ -134,11 +161,13 @@ def _env(rec: dict, sch: dict | None) -> dict:
     labels = {r["id"]: r.get("label") for r in (sch or {}).get("rooms", [])}
     furn = [it for it in (sch or {}).get("items", []) if it["key"] in furnish.TYPES]
     doors = [o for o in after["openings"] if o["kind"] == "door" and not o.get("polygon")]
+    width0 = {o["id"]: float(o["width"]) for o in rec["openings"]}   # 拆改前的识别宽度（拆改改了宽度的，原图编号和它的高度不沿用）
     rooms = []
     for rm in furnish.rooms_of(rec, sch):
         r = info[rm["id"]]
         rooms.append(dict(rm, unit=r.get("unit") or "", public=bool(r.get("public")), label=labels.get(rm["id"]) or scheme.label_point(r["polygon"]),
-                          furn=[it for it in furn if it["room"] == rm["id"]], doors=[o for o in doors if rm["id"] in o.get("rooms", [])]))
+                          furn=[it for it in furn if it["room"] == rm["id"]], doors=[o for o in doors if rm["id"] in o.get("rooms", [])],
+                          windows=_windows(rm, after["openings"], width0)))
     by = {r["id"]: r for r in rooms}
     for rm in rooms:   # 入户门：平开，一侧是本户的房间，另一侧是室外、公共空间或别的户
         rm["entrance"] = [o for o in rm["doors"] if rm["unit"] and o.get("leafs", 1) != 0 and (
@@ -147,9 +176,49 @@ def _env(rec: dict, sch: dict | None) -> dict:
     ceil = {}
     for b in (sch or {}).get("ceilings", []):
         ceil.setdefault(b["room"], []).append(b)
-    return {"rooms": rooms, "by": by, "ops": after["openings"], "ceil": ceil,
+    return {"rooms": rooms, "by": by, "ops": after["openings"], "ceil": ceil, "width0": width0,
             "walls": unary_union([Polygon(w["polygon"]).buffer(0) for w in after["walls"] if len(w["polygon"]) >= 3]),
             "doors": [(o, openings.rec_opening_zones(o), openings.rec_frame(o)) for o in doors]}
+
+
+def _windows(rm, ops, width0) -> list:
+    """房间各墙边上的窗、凸窗：[(窗, 墙边 id, 起, 止, 窗台, 窗顶)]。起止从墙边起点量（furnish.on_wall），窗台、窗顶是
+    openings.rec_extent（和建模、墙面挖的洞同一套）。"""
+    out = []
+    for o in ops:
+        if o["kind"] == "door":
+            continue
+        v0, v1 = openings.rec_extent(o, width0.get(o["id"]))
+        out += [(o, W["id"], s[0], s[1], v0, v1) for W in rm["walls"] if (s := furnish.on_wall(W, o))]
+    return out
+
+
+def _wall_of(rm, pos):
+    """点位插入点在哪面墙上：(墙边, 从起点量的 s, 离墙线 d)，离墙线不超过 ON_WALL_MM、投影落在墙边上；墙角处取离得近的。
+    都不在返回 None。"""
+    p, best = np.asarray(pos, dtype=float), None
+    for W in rm["walls"]:
+        a, u, n = np.array(W["a"]), np.array(W["u"]), np.array(W["n"])
+        s, d = float((p - a) @ u), float((p - a) @ n)
+        if -1.0 <= s <= W["len"] + 1.0 and abs(d) <= ON_WALL_MM and (best is None or abs(d) < abs(best[2])):
+            best = (W, s, d)
+    return best
+
+
+def _in_window(rm, key, pos, z):
+    """墙上装的点位（checks.wall_types）压不压窗：盒子的高度（z 到 z + 盒子高）和窗台～窗顶重叠、沿墙离洞边不到 window_gap_mm
+    （压进洞口宽度的更不行）→ (窗, 盒子边离洞边多远：负数是压进洞口宽度)，几樘都压时取压得最深的；不压返回 None。"""
+    if SYMBOLS[key]["ifc_type"] not in LIMITS["wall_types"] or not rm.get("windows"):
+        return None
+    hit = _wall_of(rm, pos)
+    if hit is None:
+        return None
+    W, s, _ = hit
+    bw, _, h = SYMBOLS[key]["body"]
+    bad = [(o, max(lo - (s + bw / 2), (s - bw / 2) - hi)) for o, wid, lo, hi, v0, v1 in rm["windows"]
+           if wid == W["id"] and z < v1 - 0.5 and z + h > v0 + 0.5]
+    bad = [(o, g) for o, g in bad if g < LIMITS["window_gap_mm"] - 0.5]
+    return min(bad, key=lambda x: (x[1], x[0]["id"])) if bad else None
 
 
 def _main_door(rm, by):
@@ -172,12 +241,11 @@ def _params(it) -> dict:
 
 
 def _part_x(it, part) -> float:
-    """部件（水槽、灶台、台盆）中心在家具局部 x 上的位置；没有部件是 0。和 furngen 画的是同一个量法（库里的橱柜没有
-    水槽、灶台参数，按 furngen 的缺省位置）。"""
+    """部件（水槽、灶台、台盆）中心在家具局部 x 上的位置；没有部件是 0。就是 furngen.part_x，和画出来的同一个位置（转角在右侧的
+    橱柜也一样；库里的橱柜没有水槽、灶台参数，按 furngen 的缺省位置）。"""
     if part is None:
         return 0.0
-    p = _params(it)
-    return (-1.0 if p.get("side") == "right" else 1.0) * (-p["width"] / 2 + furngen.positions(p)[part])
+    return furngen.part_x(_params(it), part)
 
 
 def _part_half(it, part) -> float:
@@ -200,9 +268,10 @@ def _wet(rm) -> list:
     return [f for f in rm["furn"] if f["key"] in keys]
 
 
-def _fits(E, rm, key, pos, rot, z, kind) -> str:
-    """点位放在这里行不行（都按实物：符号库的 body）：在房里、不压墙、不在门洞和门扇里（够高的除外）、没被高家具挡住
-    （灯、给排水点不查）、插座离淋浴、浴缸不到 shower_clear。行返回 ""，不行返回一句原因（报告的 skipped 用）。"""
+def _fits(E, rm, key, pos, rot, z, kind, own=()) -> str:
+    """点位放在这里行不行（都按实物：符号库的 body）：在房里、不压墙、不在门洞和门扇里（够高的除外）、墙上装的不压窗
+    （_in_window）、没被高家具挡住（灯、给排水点不查；own 里的家具不算）、插座离淋浴、浴缸不到 shower_clear。行返回 ""，
+    不行返回一句原因（报告的 skipped 用）。"""
     tol = LIMITS["tolerance_mm2"]
     fp = footprint({"key": key, "x": pos[0], "y": pos[1], "rot": rot})
     if fp.difference(rm["poly"]).area > tol:
@@ -211,7 +280,9 @@ def _fits(E, rm, key, pos, rot, z, kind) -> str:
         return "压墙"
     if z < DOOR_H and (o := next((o for o, zs, _ in E["doors"] if fp.intersection(unary_union(zs)).area > tol), None)):
         return f"在门 {o['id']} 的门洞或门扇里"
-    hit = None if kind in NO_BLOCK else _blocked(rm, Point(*pos), z, SYMBOLS[key]["body"][2])
+    if (w := _in_window(rm, key, pos, z)):
+        return f"压窗 {w[0]['id']}（离洞边不到 {LIMITS['window_gap_mm']}）"
+    hit = None if kind in NO_BLOCK else _blocked(rm, Point(*pos), z, SYMBOLS[key]["body"][2], own)
     if hit:
         return f"被{hit[0]['name']}挡住"
     if SYMBOLS[key]["ifc_type"] == "IfcOutletType":
@@ -219,6 +290,71 @@ def _fits(E, rm, key, pos, rot, z, kind) -> str:
         if w:
             return f"离{w['name']}不到 {LIMITS['shower_clear']}"
     return ""
+
+
+def _overlaps(key, pos, rot, z, taken) -> bool:
+    """和已放的点位（taken：[{key, x, y, z, rot}]）叠在一起：平面外框重叠、高度也重叠（同 validate 的 overlap）。"""
+    fp, h = footprint({"key": key, "x": pos[0], "y": pos[1], "rot": rot}), SYMBOLS[key]["body"][2]
+    return any(z < q["z"] + SYMBOLS[q["key"]]["body"][2] and q["z"] < z + h and fp.intersection(footprint(q)).area > LIMITS["tolerance_mm2"]
+               for q in taken)
+
+
+def _slide(E, rm, key, pos, rot, z, kind, taken=(), keep=None, reach=None):
+    """压窗的墙上点位顺着所在的墙边挪到最近的允许位置：_fits 通过（离每樘窗的洞边至少 window_gap_mm、不出房间、不压墙、不在
+    门洞门扇里、没被挡住……）、不和已放的点位叠在一起（taken）、keep(位置) 为真（台面插座：还在台面上能放的段里）。先试正好离
+    洞边 window_gap_mm 的地方，再往外每 SLIDE_STEP 一试，取离原位置最近的（一样近取 s 小的）；只在同一面墙边上、离原位置不超过
+    reach（None 不限）的范围里找，找不到返回 None。"""
+    hit = _wall_of(rm, pos)
+    if hit is None:
+        return None
+    W, s0, d = hit
+    a, u, n = np.array(W["a"]), np.array(W["u"]), np.array(W["n"])
+    bw, _, h = SYMBOLS[key]["body"]
+    gap = LIMITS["window_gap_mm"]
+    cand = set()
+    for o, wid, lo, hi, v0, v1 in rm["windows"]:
+        if wid != W["id"] or not (z < v1 - 0.5 and z + h > v0 + 0.5):
+            continue
+        for e, step in ((lo - gap - bw / 2, -SLIDE_STEP), (hi + gap + bw / 2, SLIDE_STEP)):
+            t = e
+            while -1.0 <= t <= W["len"] + 1.0:
+                cand.add(round(t, 1))
+                t += step
+    for t in sorted(cand, key=lambda t: (abs(t - s0), t)):
+        if reach is not None and abs(t - s0) > reach + 0.5:
+            break
+        c = a + u * t + n * d
+        if not _fits(E, rm, key, c, rot, z, kind) and not _overlaps(key, c, rot, z, taken) and (keep is None or keep(c)):
+            return c
+    return None
+
+
+def _settle(E, rm, key, pos, rot, z, kind, taken=(), keep=None) -> tuple:
+    """(位置, 原因)：放得下（_fits）原样返回；压窗的顺着墙挪（_slide），离原位置 window_slide_mm 以内挪得下返回新位置；挪不下或
+    别的原因放不下返回原位置和原因。压窗挪不下的原因里写明同一面墙上最近放得下的位置有多远（超过上限的那个距离）。
+    上限的道理：挪得再远，插头线够不着，也不在这件家具旁边或背后了，就不是给它用的点位。"""
+    why = _fits(E, rm, key, pos, rot, z, kind)
+    if not why or not _in_window(rm, key, pos, z):
+        return pos, why
+    reach = LIMITS["window_slide_mm"]
+    if (c := _slide(E, rm, key, pos, rot, z, kind, taken, keep, reach)) is not None:
+        return c, ""
+    far = _slide(E, rm, key, pos, rot, z, kind, taken, keep)
+    d = None if far is None else float(np.hypot(*(np.asarray(far, dtype=float) - np.asarray(pos, dtype=float))))
+    return pos, why + ("，同一面墙上挪不开" if d is None else f"，同一面墙上最近放得下的位置要挪 {d:.0f}，超过 {reach}")
+
+
+def _behind(E, rm, key, it, z, kind, taken=()) -> tuple:
+    """专用插座退到它服务的家具 it 背后正中：家具局部 x = 0 那条线和墙线的交点，高度不变 → (位置, 原因)，放得下原因是 ""。
+    it 自己不算挡着它（点位就是给它用的）；别的照查：压窗、门洞门扇、别的家具挡、压墙、出房间、和已放的点位（taken）叠。"""
+    p = np.asarray(furnish.frame(it)[0], dtype=float)
+    hit = _wall_of(rm, p)
+    if hit is None:
+        return p, "背后没有墙"
+    W, _s, d = hit
+    c = p - np.array(W["n"], dtype=float) * d
+    why = _fits(E, rm, key, c, it["rot"], z, kind, (it,))
+    return c, why or ("和已放的点位叠在一起" if _overlaps(key, c, it["rot"], z, taken) else "")
 
 
 def _latch_ends(o) -> list:
@@ -260,10 +396,39 @@ def _subtract(span, cuts):
     return segs
 
 
-def _free_spot(E, rm, pts, z, h, bw, kind, prefer, outlet=False):
-    """沿墙边找一段空墙：去掉墙角 150、门洞两侧 200、高过窗台的点位所在的窗洞、贴墙又在这个高度上的家具、已有的点位、
+def _over_spans(rm, name, clear, bw) -> dict:
+    """台面上方能放点位中心的墙段：{墙边 id: [(起, 止)]}（从墙边起点量）。这一组的每件家具：正面一段靠着的墙上，台面两头各让
+    150，水槽、灶台、台盆按实际宽度两边再让 clear 和半个面板（同 on 锚点）；L 形（return 大于进深）转角段外侧那条边靠着的墙上，
+    从墙角到转角段端头（端头让 150；转角段上没有水槽、灶台）。边不靠墙（离墙线超过 ON_WALL_MM）的那一段不算：台面上方没有墙。"""
+    out = {}
+    for it, _ in _furn(rm, name):
+        p, u, n = furnish.frame(it)
+        g, prm = furnish.geom(it["key"], it.get("params")), _params(it)
+        w, d, ret = g["width"], g["depth"], float(prm.get("return") or 0)
+        busy = [(_part_x(it, k), _part_half(it, k)) for k in (("basin",) if "basin" in prm else ("sink", "hob"))]
+        front = _subtract((-w / 2 + 150, w / 2 - 150), [(x - h - clear - bw / 2, x + h + clear + bw / 2) for x, h in busy])
+        runs = [(p - u * w / 2, u, w, [(s0 + w / 2, s1 + w / 2) for s0, s1 in front])]   # (起点, 方向, 全长, 从起点量能放的段)
+        if ret > d:
+            k = 1.0 if prm.get("side") == "right" else -1.0
+            runs.append((p + u * k * w / 2, n, ret, [(0.0, ret - 150)]))
+        for A, v, length, segs in runs:
+            for W in rm["walls"]:
+                a, wu, wn = (np.array(W[c], dtype=float) for c in ("a", "u", "n"))
+                sg, s0 = float(v @ wu), float((A - a) @ wu)
+                if abs(sg) < 0.99 or abs(float((A - a) @ wn)) > ON_WALL_MM or min(s0, s0 + sg * length) < -1.0 \
+                        or max(s0, s0 + sg * length) > W["len"] + 1.0:
+                    continue
+                out.setdefault(W["id"], []).extend(sorted((s0 + sg * t0, s0 + sg * t1)) for t0, t1 in segs if t1 >= t0)
+                break
+    return out
+
+
+def _free_spot(E, rm, pts, z, h, bw, kind, prefer, outlet=False, within=None):
+    """沿墙边找一段空墙：去掉墙角 150、门洞两侧 200、高过窗台的点位所在的窗洞（窗顶以上也不放，两侧各让 window_gap_mm；窗台和
+    建模同一套 openings.rec_extent）、贴墙又在这个高度上的家具、已有的点位、
     （插座）离淋浴、浴缸不到 shower_clear 的墙，剩下够长的段里，prefer=window 先挑有窗的墙；再挑同类点位少的墙（插座宜分设
-    不同墙面）、最长的段，取中点。"""
+    不同墙面）、最长的段，取中点。within（_over_spans）给了时只认中心落在这些段里的位置：中点在里面照旧取中点，不在就取这一段
+    落在里面的那部分（最长的）的中点，一点都不落在里面的段不要。"""
     best = None
     wet = [furnish.footprint(f).buffer(LIMITS["shower_clear"]) for f in _wet(rm)] if outlet else []
     for i, W in enumerate(rm["walls"]):
@@ -279,8 +444,8 @@ def _free_spot(E, rm, pts, z, h, bw, kind, prefer, outlet=False):
                     cut.append((s[0] - 200, s[1] + 200))
                 continue
             win = True
-            if z + h > (o["sill"] if o.get("sill") is not None else furnish.RULES["window_sill_mm"]):
-                cut.append((s[0] - 100, s[1] + 100))
+            if z + h > openings.rec_extent(o, E["width0"].get(o["id"]))[0]:
+                cut.append((s[0] - LIMITS["window_gap_mm"], s[1] + LIMITS["window_gap_mm"]))
         for it in rm["furn"]:
             for part, z0, top in _parts(it):
                 if top > z and z0 < z + h and part.distance(line) < LIMITS["block_gap"]:
@@ -294,26 +459,44 @@ def _free_spot(E, rm, pts, z, h, bw, kind, prefer, outlet=False):
                 cut.append((min(ss) - bw / 2, max(ss) + bw / 2))
         same = 0
         for q in pts:
-            if q["room"] == rm["id"] and Point(q["x"], q["y"]).distance(line) < 50:
+            if q["room"] == rm["id"] and Point(q["x"], q["y"]).distance(line) < ON_WALL_MM:
                 s = float((np.array([q["x"], q["y"]]) - a) @ u)
                 cut.append((s - bw / 2 - 200, s + bw / 2 + 200))
                 same += q["kind"] == kind
         for s0, s1 in _subtract((0.0, L), cut):
             if s1 - s0 < bw + 100:
                 continue
+            pos = a + u * (s0 + s1) / 2
+            if within is not None:   # 中心能放的范围（离两头够 bw/2 + 50）和台面上方的段的交集
+                lo, hi = s0 + bw / 2 + 50, s1 - bw / 2 - 50
+                inner = [(max(lo, c0), min(hi, c1)) for c0, c1 in within.get(W["id"], []) if max(lo, c0) <= min(hi, c1)]
+                if not inner:
+                    continue
+                if not any(c0 - 0.5 <= (s0 + s1) / 2 <= c1 + 0.5 for c0, c1 in inner):
+                    c0, c1 = max(inner, key=lambda c: (c[1] - c[0], -c[0]))
+                    pos = a + u * (c0 + c1) / 2
             score = (0 if prefer == "window" and win else 1, same, -(s1 - s0), i)
             if best is None or score < best[0]:
-                best = (score, a + u * (s0 + s1) / 2, W)
+                best = (score, pos, W)
     return best[1:] if best else None
 
 
-def _spots(r, rm, E, key, z, kind, why) -> list:
+def _spots(r, rm, E, key, z, kind, why, pts=()) -> list:
     """一条规则（或意图里的一条）的锚点 → [(位置, 转角, 房间 id)]；wall 锚点由 _add 一个一个找。值写错抛 ValueError。
-    家具旁、背后、台面上的点位放不下（出房间、压墙、在门洞或门扇里、被高家具挡住）的不要，原因记进 why；单写一侧的换另一侧。
-    房门开关放不下时放到门外那间房（同一户）锁舌一侧的墙上，再不行照放，由校验报出来。"""
+    家具旁、背后、台面上的点位压窗时顺着墙挪到最近的允许位置（_settle：离原位置不超过 window_slide_mm，不叠到 pts 里本房已放的
+    点位上，台面插座还在台面能放的段里、和别的台面插座隔开）；挪不下的、别的原因放不下的（出房间、压墙、在门洞或门扇里、被高家具
+    挡住）不要，原因记进 why；单写一侧的换另一侧，家具旁的专用插座两侧都放不下时退到这件家具背后正中（_behind）。房门开关放不下
+    （含压窗）时放到门外那间房（同一户）锁舌一侧的墙上，再不行照放，由校验报出来。"""
     a = next(k for k in ANCHORS if k in r)
     v = r[a]
     ok = lambda pos, rot, room=rm: _fits(E, room, key, pos, rot, z, kind)
+    taken = [{"key": _symbol(q["type"]), "x": q["x"], "y": q["y"], "z": q["z"], "rot": q["rot"]} for q in pts if q["room"] == rm["id"]]
+
+    def settle(c, rot, keep=None):   # 放下了的记进 taken：后面挪的点位不叠上去
+        c, b = _settle(E, rm, key, c, rot, z, kind, taken, keep)
+        if not b:
+            taken.append({"key": key, "x": float(c[0]), "y": float(c[1]), "z": z, "rot": rot})
+        return c, b
     if a in ("beside", "behind", "on", "above", "floor") and not _furn(rm, v):
         why.append(f"没有这件家具（{v}）")
         return []
@@ -327,16 +510,27 @@ def _spots(r, rm, E, key, z, kind, why) -> list:
             p, u, _n = furnish.frame(it)
             w = furnish.geom(it["key"], it.get("params"))["width"]
             cand = [p + u * k * (w / 2 + _num(r, "gap")) for k in {"left": (-1, 1), "right": (1, -1), "both": (-1, 1)}[side]]
-            bad = [ok(c, it["rot"]) for c in cand]
-            good = [c for c, b in zip(cand, bad) if not b]
-            why += [b for b in bad if b] if side == "both" else ([] if good else bad[:1])
-            out += [(c, it["rot"], rm["id"]) for c in (good if side == "both" else good[:1])]
+            good, bad = [], []
+            for c in cand:   # 单写一侧的：这一侧（挪过也算）放下了就不试另一侧
+                c, b = settle(c, it["rot"])
+                (bad if b else good).append(b or c)
+                if good and side != "both":
+                    break
+            if not good and kind == "dedicated":   # 专用插座两侧都放不下：退到它服务的这件家具背后正中（一件电器一个就够）
+                c, b = _behind(E, rm, key, it, z, kind, taken)
+                if b:
+                    bad = [f"{bad[0]}；{it['name']}背后正中也放不下：{b}"]
+                else:
+                    taken.append({"key": key, "x": float(c[0]), "y": float(c[1]), "z": z, "rot": it["rot"]})
+                    good, bad = [c], []
+            why += bad if side == "both" else ([] if good else bad[:1])
+            out += [(c, it["rot"], rm["id"]) for c in good]
         return out
     if a == "behind":
         for it, part in _furn(rm, v):
             p, u, _n = furnish.frame(it)
-            c = p + u * (_part_x(it, part) + _num(r, "dx"))
-            out += [(c, it["rot"], rm["id"])] if not (b := ok(c, it["rot"])) else []
+            c, b = settle(p + u * (_part_x(it, part) + _num(r, "dx")), it["rot"])
+            out += [(c, it["rot"], rm["id"])] if not b else []
             why += [b] if b else []
         return out
     if a == "on":
@@ -356,11 +550,16 @@ def _spots(r, rm, E, key, z, kind, why) -> list:
                 if not cand:
                     break
                 k_of[max(cand, key=lambda i: (gap_after(i), free[i][1] - free[i][0], -i))] += 1
-            for (a_, b), k in zip(free, k_of):
-                for j in range(k):
-                    c = p + u * (a_ + (b - a_) * (j + 0.5) / k)
-                    out += [(c, it["rot"], rm["id"])] if not (bad := ok(c, it["rot"])) else []
-                    why += [bad] if bad else []
+            xs = lambda c, p=p, u=u: float((np.asarray(c) - p) @ u)   # 台面上的位置（家具局部 x）
+            placed = [p + u * (a_ + (b - a_) * (j + 0.5) / k) for (a_, b), k in zip(free, k_of) for j in range(k)]
+            for i in range(len(placed)):   # 压窗的挪到最近的允许位置：还在能放的段里、和这条台面上别的插座隔 step
+                others = [q for q in placed[:i] + placed[i + 1:] if q is not None]
+                keep = lambda q, others=others: (any(s0 - 0.5 <= xs(q) <= s1 + 0.5 for s0, s1 in free)
+                                                 and all(abs(xs(q) - xs(o)) >= step - 0.5 for o in others))
+                c, bad = settle(placed[i], it["rot"], keep)
+                placed[i] = None if bad else c
+                out += [(c, it["rot"], rm["id"])] if not bad else []
+                why += [bad] if bad else []
             why += [f"台面上放不下（离水槽、灶台、台盆的边至少 {clear:.0f}，插座之间隔 {step:.0f}）"] * (n - sum(k_of))
         return out
     if a == "above":
@@ -734,6 +933,10 @@ def _check(r, extra=()) -> str:
             raise ValueError(f"{k} 是 {'、'.join(ok)} 之一")
     if anchors[0] not in ("wall", "door", "ceiling"):
         group(r[anchors[0]])
+    if "over" in r:
+        group(furnish.text_field(r, "over", "家具组名"))
+    elif anchors[0] == "wall" and "clear" in r:
+        raise ValueError("clear 和 over 一起写（台面上方离水槽、灶台、台盆的边多远）")
     if "if" in r:
         group(furnish.text_field(r, "if", "家具组名").lstrip("!"))
     return t
@@ -761,9 +964,16 @@ def _add(r, rm, E, pts, need, skipped, ask=False) -> tuple[int, int]:
             what = "插座" if P["kind"] == "socket" else P["name"]
             raise ValueError(f"{rm['name']}已经有 {have} 个{what}，" + (f"不少于规则表的 {need[P['kind']]} 个，不用补" if P["kind"] in need
                                                                     else f"规则表没给{rm['name']}定{what}最少几个，fill 无从补起"))
+        bw = SYMBOLS[key]["body"][0]
+        within = _over_spans(rm, r["over"], _num(r, "clear", 100.0), bw) if "over" in r else None
         for k in range(n):
-            hit = _free_spot(E, rm, pts, z, SYMBOLS[key]["body"][2], SYMBOLS[key]["body"][0], P["kind"], r.get("prefer", "long"),
-                             SYMBOLS[key]["ifc_type"] == "IfcOutletType")
+            hit = None if within == {} else _free_spot(E, rm, pts, z, SYMBOLS[key]["body"][2], bw, P["kind"], r.get("prefer", "long"),
+                                                       SYMBOLS[key]["ifc_type"] == "IfcOutletType", within)
+            if hit is None and within is not None:   # 台面上方放不下：少放，不放到没有台面的墙上
+                skip((f"没有这件家具（{r['over']}）" if not _furn(rm, r["over"]) else
+                      f"台面上方放不下（离水槽、灶台、台盆的边至少 {_num(r, 'clear', 100.0):.0f}，避开窗和已有的点位）")
+                     + f"，还差 {n - k} 个：只放在台面上方，不放到没有台面的墙上")
+                return k, n - k
             if hit is None:
                 skip(f"找不到空墙（还差 {n - k} 个）")
                 return k, n - k
@@ -778,7 +988,7 @@ def _add(r, rm, E, pts, need, skipped, ask=False) -> tuple[int, int]:
             pts.append(q)
         return len(got), 0
     why = []
-    spots = _spots(r, rm, E, key, z, P["kind"], why)
+    spots = _spots(r, rm, E, key, z, P["kind"], why, pts)
     for w in why:
         skip(w)
     missing = 0 if not spots else len(why)   # 一件家具都没有时 why 只有一条"没有这件家具"
@@ -1069,9 +1279,10 @@ def _circuits(items, unit_of) -> None:
 # ---------------------------------------------------------------- 校验
 def validate(items: list, rec: dict, sch: dict | None = None, units=None) -> list[dict]:
     """点位（键在符号库里、不是家具的 items）的校验 → 违规列表 [{room, room_id, item, check, value, unit, with, msg}]。check：
-    in_door 落在门洞里或门扇开启范围里（门后；开关的门后归 switch_reach）、blocked 被高家具挡住（点位离家具某一块不到 block_gap、
-    高度又和这一块重叠；灯、给排水点不查）、outside_room 出房间、in_wall 压墙、overlap 和同一间房里另一个点位叠在一起（平面外框
-    重叠、高度也重叠）、socket_count 插座少于规则表的 min、switch_reach 房门开关离锁舌边超过 switch_reach 或在门扇开启范围里、
+    in_door 落在门洞里或门扇开启范围里（门后；开关的门后归 switch_reach）、in_window 墙上装的点位压窗（盒子的高度和窗台～窗顶
+    重叠、沿墙离洞边不到 window_gap_mm，value 是盒子边离洞边多远、负数是压进洞口宽度）、blocked 被高家具挡住（点位离家具某一块不到 block_gap、
+    高度又和这一块重叠；灯、给排水点不查；专用插座在它服务的电器背后时不算那件电器挡着，_own）、outside_room 出房间、
+    in_wall 压墙、overlap 和同一间房里另一个点位叠在一起（平面外框重叠、高度也重叠）、socket_count 插座少于规则表的 min、switch_reach 房门开关离锁舌边超过 switch_reach 或在门扇开启范围里、
     near_shower 插座离淋浴、浴缸不到 shower_clear、circuit_over 一路超过上限、circuit_gang 一联开关接的灯不在同一路或开关这一联
     和灯不同路。units：只查这几户的点位、插座数和回路。"""
     E = _env(rec, dict(sch or {}, items=items))
@@ -1109,7 +1320,11 @@ def validate(items: list, rec: dict, sch: dict | None = None, units=None) -> lis
                     add(rm, name, "in_door", a, "mm2", f"落在门 {o['id']} 的门洞里", o["id"])
                 elif kind != "switch" and len(zs) > 1 and (a := fp.intersection(unary_union(zs[1:])).area) > tol:
                     add(rm, name, "in_door", a, "mm2", f"在门 {o['id']} 的门扇开启范围里（门后）", o["id"])
-        if kind not in NO_BLOCK and (hit := _blocked(rm, p, it["z"], SYMBOLS[it["key"]]["body"][2])):
+        if (hw := _in_window(rm, it["key"], (it["x"], it["y"]), it["z"])):
+            o, g = hw
+            add(rm, name, "in_window", g, "mm", f"落在窗 {o['id']} 的洞口宽度里（盒子压进 {-g:.0f}）" if g < 0 else
+                f"离窗 {o['id']} 的洞边只有 {g:.0f}，不到 {LIMITS['window_gap_mm']}", o["id"])
+        if kind not in NO_BLOCK and (hit := _blocked(rm, p, it["z"], SYMBOLS[it["key"]]["body"][2], _own(rm, point_type(it), (it["x"], it["y"])))):
             f, top = hit
             add(rm, name, "blocked", top, "mm", f"被{f['name']}挡住（离它不到 {LIMITS['block_gap']}，它高 {top:.0f}，点位高 {it['z']:.0f}）",
                 f.get("plan_id") or f["name"])

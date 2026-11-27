@@ -37,7 +37,10 @@
   "C23": {"ref": "推断", "summary": "一间房的灯分组控制（主灯、筒灯、灯带各一组），同一个门口的各组合在一块多联面板上（有双控的组时用多联双控面板）；86 型面板常见到三联，多了挨着再加一个面板", "params": {"panel_max": 3}, "level": "—", "status": "推断"},
   "C24": {"ref": "惯例", "summary": "筒灯之间中心距不小于 0.8m：一段放不下两盏的只放一盏在正中，窄过道里两排挨得太近的只放一排在中线上；一排里的间距取整到 10mm，余数分给两头", "params": {"spacing_min": 800, "round": 10}, "level": "C", "status": "惯例"},
   "C25": {"ref": "推断", "summary": "灯具定位图上，同一直线上相邻两盏筒灯相距超过最大间距的 1.5 倍就不算一排，分开标注，各自量到最近的那面墙", "params": {"row_break": 1.5}, "level": "—", "status": "推断"},
-  "C26": {"ref": "推断", "summary": "一排筒灯两头到墙只差一点（不到 0.1m）时取对称；同一圈里相对的两排可布灯长度相差不到一个间距时两排灯位对齐（取短的那排的排法），现场按房间对称排，差一点看着像画错", "params": {"end_sym_max": 100, "align_within": 1.0}, "level": "—", "status": "推断"}
+  "C26": {"ref": "推断", "summary": "一排筒灯两头到墙只差一点（不到 0.1m）时取对称；同一圈里相对的两排可布灯长度相差不到一个间距时两排灯位对齐（取短的那排的排法），现场按房间对称排，差一点看着像画错", "params": {"end_sym_max": 100, "align_within": 1.0}, "level": "—", "status": "推断"},
+  "C27": {"ref": "推断", "summary": "墙上装的插座、开关、箱、给水点不压窗：盒子的高度和窗台～窗顶重叠时，盒子边离窗洞边至少 100（窗框、窗套和墙砖收口约 50～80 宽，再留一点）；压窗的顺着墙挪到最近的允许位置，挪不下按原来的退路（换另一侧、不放，插座由 fill 补到空墙上）", "params": {"window_gap": 100}, "level": "—", "status": "推断"},
+  "C28": {"ref": "推断", "summary": "压窗的点位沿墙挪开不超过 600：600 以内插头线还够得着，还算在这件家具旁边或背后；再远就不是给它用的点位了，按放不下处理。家具旁的专用插座（冰箱这类）两侧都放不下时放在这件电器背后正中", "params": {"slide_max": 600}, "level": "—", "status": "推断"},
+  "C29": {"ref": "惯例", "summary": "厨房台面插座给台面上用的小电器，只装在台面上方的墙上（橱柜正面一段和 L 形转角段靠着的墙）：台面上方放不下时少装、在报告里写明，不装到没有台面的墙上", "params": {}, "level": "C", "status": "惯例"}
  },
  "points": {
   "light":          {"name": "主灯", "symbol": "cn_light_ceiling", "kind": "light", "circuit": "WL"},
@@ -149,7 +152,7 @@
    {"point": "cold", "behind": "sink", "dx": -75, "src": ["C10", "C15"]},
    {"point": "hot", "behind": "sink", "dx": 75, "src": ["C10", "C15"]},
    {"point": "drain", "floor": "sink", "at": "center", "dy": 150, "src": ["C20"]},
-   {"point": "socket_counter", "wall": "free", "fill": true, "src": ["S5"]}
+   {"point": "socket_counter", "wall": "free", "over": "counter", "clear": 100, "fill": true, "src": ["S5", "C29"]}
   ]},
   "bathroom": {"min": {"socket": 1}, "src": ["S5"], "rules": [
    {"point": "light", "ceiling": "center"},
@@ -194,7 +197,9 @@
   "corridor": {"like": "storage"}
  },
  "checks": {"tolerance_mm2": 100, "block_gap": 100, "switch_reach": 600, "shower_clear": 600, "shower_clear_src": "C16", "light_gap": 1000,
-            "switch_gap_max": 200, "switch_gap_src": "S9",
+            "switch_gap_max": 200, "switch_gap_src": "S9", "window_gap_mm": 100, "window_gap_src": "C27",
+            "window_slide_mm": 600, "window_slide_src": "C28",
+            "wall_types": ["IfcOutletType", "IfcSwitchingDeviceType", "IfcElectricDistributionBoardType", "IfcJunctionBoxType", "IfcValveType", "IfcAlarmType"],
             "ceiling_lights": {"spacing_max": 1500, "end_min": 400, "min_run": 1000, "wall_min": 150, "curtain_clear": 150, "radius": 45,
                                "light_clear": 600, "panel_max": 3, "panel_step": 100,
                                "spacing_min": 800, "spacing_round": 10, "row_break": 1.5, "end_sym_max": 100, "align_within": 1.0,

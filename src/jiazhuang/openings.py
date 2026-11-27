@@ -57,6 +57,9 @@ if ifcopenshell is not None:
 _CONV = conventions.get("openings")
 _H = _CONV["default_height_mm"]
 DEFAULT_DOOR_H, DEFAULT_WINDOW_H, DEFAULT_BAY_H = float(_H["door"]), float(_H["window"]), float(_H["bay"])
+DEFAULT_SILL, DEFAULT_BAY_SILL = float(_CONV["default_sill_mm"]["window"]), float(_CONV["default_sill_mm"]["bay"])
+WINDOW_HEAD = DEFAULT_SILL + DEFAULT_WINDOW_H   # 窗高不知道的窗一律到这个窗顶（缺省窗台 + 缺省窗高）
+MIN_WINDOW_H = float(_CONV["min_window_height_mm"])
 HIGH_SILL = float(_CONV["high_window_sill_mm"])
 # 类别：代号 → (类别名, IFC 类)；顺序就是门窗表里的顺序
 CATEGORIES = collections.OrderedDict((c["code"], (c["name"], c["ifc"])) for c in _CONV["categories"])
@@ -139,6 +142,37 @@ def rec_opening_zones(o: dict) -> list:
         return [Polygon(o["polygon"]).buffer(0)]
     c, u, n, w, t, op = rec_frame(o)
     return opening_zones(c, u, n, w, t, op, pad=20.0)
+
+
+def rec_size(o: dict, width0: float | None = None) -> dict:
+    """识别结果里的一樘门窗 → 编号和竖向尺寸：{label, note, sill, sill_src, height, height_src}（毫米，离本层楼面；门的 sill 是 None）。
+    建模（plan2ifc）、墙面（wall 挖的洞）、吊顶（门窗顶）、水电（点位避窗）都用这一份，改取法只改这里，几处才对得上。
+    - 原图编号：markcode.adopt（width0 是拆改前的识别宽度，拆改改了宽度的不沿用）；采用的编号带高度。
+    - 门：落地；高 = 编号里的，没有用缺省门高。
+    - 凸窗（有 polygon）：窗台一律缺省；高 = 识别结果的 height、编号里的、缺省凸窗高。
+    - 窗：窗台 = 识别结果的 sill，没有用缺省；高 = 识别结果的 height、编号里的；都没有时按统一的窗顶 WINDOW_HEAD
+      （缺省窗台 + 缺省窗高）算，窗高 = 窗顶 − 窗台，不小于 min_window_height_mm。窗台是缺省窗台时正好是缺省窗高；
+      窗台 1500 的高窗是 900，不会按 1500 + 1500 顶到 3000（穿过吊顶和原顶）。这样算的高度来源仍是"默认值"（门窗表注待实测）。"""
+    w = float(o["width"])
+    lab, note = markcode.adopt(o, w, width0)
+    lab_h = markcode.label_height(lab, w)
+    rec_h = markcode.rec_height(o) if o["kind"] == "window" else None
+    out = {"label": lab, "note": note}
+    if o.get("polygon"):
+        sill, sill_src, dflt = DEFAULT_BAY_SILL, "默认值", DEFAULT_BAY_H
+    elif o["kind"] == "door":
+        return dict(out, sill=None, sill_src=None, height=lab_h or DEFAULT_DOOR_H, height_src="原图编号" if lab_h else "默认值")
+    else:
+        sill, sill_src = (float(o["sill"]), "识别结果") if o.get("sill") is not None else (DEFAULT_SILL, "默认值")
+        dflt = max(WINDOW_HEAD - sill, MIN_WINDOW_H)
+    h, h_src = (rec_h, "识别结果") if rec_h else (lab_h, "原图编号") if lab_h else (dflt, "默认值")
+    return dict(out, sill=sill, sill_src=sill_src, height=float(h), height_src=h_src)
+
+
+def rec_extent(o: dict, width0: float | None = None) -> tuple:
+    """门窗洞口的竖向范围 (底, 顶)（离本层楼面，毫米），门的底是 None（落地）；取法见 rec_size。"""
+    s = rec_size(o, width0)
+    return (None, s["height"]) if s["sill"] is None else (s["sill"], s["sill"] + s["height"])
 
 
 # ------------------------------------------------------------------ 属性

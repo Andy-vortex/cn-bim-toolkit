@@ -1,0 +1,67 @@
+{
+ "_说明": "墙面规则，见同目录 README。sources：依据（条文号或\"惯例\"\"推断\"、自拟概括、参数、可信度 A/B/C/—、状态；条文和网页都待原文核对）。materials：墙面材料（name 图上和表里写的名字，kind paint 涂料 / tile 墙砖 / wallpaper 壁纸 / skirting 踢脚线，size 墙砖规格 [短边, 长边]，joint 缝宽，waste 损耗率，height 踢脚线高，thickness 建模时面层板的厚度，css 建模时的材质名，出图按它分样式）。rooms：房间类型（../furniture/room_types.json）→ 缺省做法（finish 材料键，top 贴到哪：\"full\" 到原顶、\"ceiling+100\" 吊顶底以上 100（墙砖在吊顶底以上 50～100 之间有一道横缝时停在这道缝上，见 W15）、数字是离楼面毫米，skirting 踢脚线材料键或 false，dir 墙砖 h 横贴（长边水平）/ v 竖贴）。elevations：出哪些墙的立面（mode：finished 厨卫每面 + 有柜体固定家具贴墙的 + 做法不是涂料的 + 意图点名的，all 每面都出，intent 只出意图点名的；always 每面都出的房间类型；fixed 算柜体、固定家具的家具键；fixed_gap_mm 家具靠墙边离墙线不超过这么多算贴墙）。layout：排砖（见 README）。checks：校验门槛。长度都是毫米，高度离本层楼面。",
+ "sources": {
+  "W1": {"ref": "惯例", "summary": "客厅、餐厅、卧室、书房、过道、玄关墙面刷白色乳胶漆，贴到原顶（吊顶以上也刷）；施工图说明里常写\"未注明墙面均为白色乳胶漆\"", "params": {}, "level": "C", "status": "惯例（网页，待原文核对）"},
+  "W2": {"ref": "惯例", "summary": "踢脚线高 60～100，80 最常见；厨房、卫生间墙砖到底不做踢脚线；阳台不做", "params": {"height": 80}, "level": "C", "status": "惯例（网页，待原文核对）"},
+  "W3": {"ref": "惯例", "summary": "厨房、卫生间墙面贴墙砖，300×600 常见；小卫生间多竖贴，厨房多横贴", "params": {"size": [300, 600]}, "level": "C", "status": "惯例（网页，待原文核对）"},
+  "W4": {"ref": "惯例", "summary": "墙砖贴到吊顶底以上约 100（也有说 80），不做吊顶的贴到原顶", "params": {"over": 100}, "level": "C", "status": "惯例（网页，待原文核对）"},
+  "W5": {"ref": "惯例", "summary": "墙砖排砖：不出现小于 100 的条砖；非整砖放在阴角或门后；墙砖压地砖（施工顺序：先铺地砖，墙砖立在地砖上，不要求第一排整砖）；开关插座孔离砖缝大于 20", "params": {"min_edge": 100, "socket_gap": 20}, "level": "C", "status": "惯例（网页，待原文核对）"},
+  "W6": {"ref": "惯例", "summary": "阳台墙面刷涂料，不做踢脚线", "params": {}, "level": "C", "status": "惯例"},
+  "W7": {"ref": "惯例", "summary": "墙砖缝宽约 2mm，损耗率约 5%", "params": {"joint": 2, "waste": 0.05}, "level": "C", "status": "惯例"},
+  "W8": {"ref": "惯例", "summary": "精装出图厨房、卫生间各出四面立面；别的房间只出有做法的墙（电视墙、床头墙、衣柜、鞋柜这类柜体），没造型的墙靠总说明", "params": {}, "level": "C", "status": "惯例（网页，待原文核对）"},
+  "W9": {"ref": "JGJ/T 244-2011 第 3.6 节", "summary": "平面图上的立面编号用字母，按顺时针排", "params": {}, "level": "B", "status": "待原文核对"},
+  "W10": {"ref": "推断", "summary": "立面编号从朝北（图纸上方）那面起为 A，顺时针 B、C、D，多于四面接着 E、F；房间里每面墙都编字母，不出立面的也编，字母不随出哪几面变", "params": {}, "level": "—", "status": "推断"},
+  "W11": {"ref": "推断", "summary": "面层建模：贴墙面一块板，涂料、墙砖、壁纸厚 8，踢脚线厚 10、在面层外面；竖向轮廓减去门窗洞口；砖缝不建模", "params": {"finish": 8, "skirting": 10}, "level": "—", "status": "推断"},
+  "W12": {"ref": "推断", "summary": "墙砖伸进吊顶不到 50 时，吊顶边口会露出砖顶的切口", "params": {"over_min": 50}, "level": "—", "status": "推断"},
+  "W13": {"ref": "推断", "summary": "柜体、固定家具（衣柜、书柜、鞋柜、电视柜、高柜、橱柜、浴室柜、淋浴房）背靠的墙要出立面；靠墙边离墙线不超过 120 算贴墙", "params": {"gap": 120}, "level": "—", "status": "推断"},
+  "W14": {"ref": "推断", "summary": "墙砖竖向和沿墙一样：整砖从露着的一端起，非整砖落在另一端，非整砖小于 100 时网格往起铺那端挪到它正好 100。贴进吊顶时露着的是吊顶底：一条缝对齐吊顶底、往下整砖，非整砖落在最下面一排，吊顶底下露出的是一块整砖的下半截、切口藏在吊顶里；没有吊顶、砖不到吊顶时露着的是顶：从地面完成面整砖起，最上面一排切，不够宽时往下挪", "params": {"min_edge": 100}, "level": "—", "status": "推断"},
+  "W15": {"ref": "推断", "summary": "墙砖写贴到吊顶底以上 n（如 100）时，吊顶底以上 50 到 n 之间有一道横缝，就停在这道缝上：再往上只剩一窄条切块，藏在吊顶里，现场不贴，算量也不算；没有缝落在这一段里照旧贴到 n。贴到原顶、写了高度的墙不受影响", "params": {"over_min": 50}, "level": "—", "status": "推断"}
+ },
+ "materials": {
+  "paint": {"name": "白色乳胶漆", "kind": "paint", "thickness": 8, "css": "cn-wall-paint", "src": ["W1", "W11"]},
+  "tile300x600": {"name": "墙砖", "kind": "tile", "size": [300, 600], "joint": 2, "waste": 0.05, "thickness": 8, "css": "cn-wall-tile", "src": ["W3", "W7", "W11"]},
+  "wallpaper": {"name": "壁纸", "kind": "wallpaper", "thickness": 8, "css": "cn-wall-paper", "src": ["W11"]},
+  "skirting": {"name": "踢脚线", "kind": "skirting", "height": 80, "thickness": 10, "css": "cn-skirting", "src": ["W2", "W11"]}
+ },
+ "rooms": {
+  "living": {"finish": "paint", "top": "full", "skirting": "skirting", "src": ["W1", "W2"]},
+  "dining": {"finish": "paint", "top": "full", "skirting": "skirting", "src": ["W1", "W2"]},
+  "master_bedroom": {"finish": "paint", "top": "full", "skirting": "skirting", "src": ["W1", "W2"]},
+  "bedroom": {"finish": "paint", "top": "full", "skirting": "skirting", "src": ["W1", "W2"]},
+  "study": {"finish": "paint", "top": "full", "skirting": "skirting", "src": ["W1", "W2"]},
+  "corridor": {"finish": "paint", "top": "full", "skirting": "skirting", "src": ["W1", "W2"]},
+  "entry": {"finish": "paint", "top": "full", "skirting": "skirting", "src": ["W1", "W2"]},
+  "kitchen": {"finish": "tile300x600", "dir": "h", "top": "ceiling+100", "skirting": false, "src": ["W3", "W4", "W2"]},
+  "bathroom": {"finish": "tile300x600", "dir": "v", "top": "ceiling+100", "skirting": false, "src": ["W3", "W4", "W2"]},
+  "balcony": {"finish": "paint", "top": "full", "skirting": false, "src": ["W6"]},
+  "storage": {"finish": "paint", "top": "full", "skirting": "skirting", "src": ["W1", "W2"]},
+  "other": {"finish": "paint", "top": "full", "skirting": "skirting", "src": ["W1", "W2"]}
+ },
+ "elevations": {
+  "mode": "finished",
+  "always": ["kitchen", "bathroom"],
+  "fixed": ["cn_wardrobe", "cn_bookcase", "cn_shoe_cabinet", "cn_tv_cabinet", "cn_kitchen", "cn_vanity", "cn_shower",
+            "lib:ADG Main Bedroom Wardrobe", "lib:Neufert Single Person Wardrobe", "lib:Generic Full Height Cupboard",
+            "lib:Neufert Medium Full Height Cupboard", "lib:Neufert Small Kitchen Bench", "lib:Neufert Medium Kitchen Bench",
+            "lib:Neufert Large Kitchen Bench", "lib:Generic Medium Laundry Tub With Cupboard"],
+  "fixed_gap_mm": 120,
+  "src": ["W8", "W9", "W10", "W13"]
+ },
+ "layout": {
+  "min_edge_mm": 100,
+  "socket_gap_mm": 20,
+  "door_end_mm": 300,
+  "src": ["W5", "W14", "W15"]
+ },
+ "checks": {
+  "area_tol_mm2": 100,
+  "wall_gap_mm": 60,
+  "open_min_mm": 100,
+  "ceiling_gap_mm": 30,
+  "ceiling_cover": 0.9,
+  "over_min_mm": 50,
+  "point_wall_mm": 60,
+  "point_types": ["IfcOutletType", "IfcSwitchingDeviceType", "IfcElectricDistributionBoardType", "IfcJunctionBoxType", "IfcValveType", "IfcAlarmType"],
+  "src": ["W12"]
+ }
+}

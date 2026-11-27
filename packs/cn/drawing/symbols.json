@@ -105,8 +105,8 @@
       ]
     },
     "cn_bed_care": {
-      "ifc_type": "IfcFurnitureType", "predefined": "BED", "name": "护理床",
-      "legend": "护理床（1000×2100）", "default_height": 0, "body": [1000, 2100, 550], "body_offset": [-500, 0, 0],
+      "ifc_type": "IfcFurnitureType", "predefined": "BED", "name": "单人床",
+      "legend": "单人床（1000×2100）", "default_height": 0, "body": [1000, 2100, 550], "body_offset": [-500, 0, 0],
       "views": ["PLAN_VIEW"],
       "items": [
         {"polyline": [[-500, 0], [500, 0], [500, 2100], [-500, 2100], [-500, 0]]},

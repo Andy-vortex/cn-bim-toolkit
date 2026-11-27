@@ -12,10 +12,12 @@
 | 水电点位：规则表布点、回路、开关控制哪些灯、几何校验 | `mep.py`，约定包 `packs/cn/mep/` | 实验 |
 | 吊顶：按房间类型给缺省、意图逐间改、净高校验 | `ceiling.py`，约定包 `packs/cn/ceiling/` | 实验 |
 | 地面：材料、排砖（对中、地漏对砖中、木地板错缝）、门槛石、数量 | `flooring.py`，约定包 `packs/cn/flooring/` | 实验 |
+| 墙面：每面墙的做法、高度、墙砖排砖、出哪些墙的立面和立面字母 | `wall.py`，约定包 `packs/cn/wall/` | 实验 |
 | 建模 → IFC4 | `plan2ifc.py`、`symbols.py` | 可用 |
 | 平面图、门窗表、图纸目录 | `drawset.py`、`annotate.py`、`openings.py`、`schedules.py`，约定包 `packs/cn/drawing/` | 可用 |
 | 水电图（插座布置、开关连线、给排水点位，回路表、点位统计表）、顶面布置图、灯具定位图、地面铺装图、地面材料表 | 同上 | 实验 |
-| 立面、大样 | — | 未开始 |
+| 室内立面：每面要出立面的墙一张视图，内视符号、尺寸、标高、点位高度、材料标注、墙砖缝、踢脚线 | `elevation.py`，同上 | 实验 |
+| 大样 | — | 未开始 |
 | 规范自查 | `checker.py`，规则包 `packs/cn/rules/` | 可用 |
 | 渲染与漫游 | Blender Cycles、Pannellum | 未接入 |
 | agent 接口 | 技能 + MCP | 未开始 |
@@ -42,7 +44,7 @@ blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- build/floor
 
 ## 家具布置
 
-agent 读房间摘要，写布置意图（放什么、靠哪面墙、和谁的关系，不写坐标）；`place` 换算成坐标、做几何校验，有违规退出 1，报告里每条一行原因，改意图重来。格式见 [packs/cn/furniture](packs/cn/furniture/README.md)。家具类型运行时从 Bonsai 自带的家具库引进。
+agent 读房间摘要，写布置意图（放什么、靠哪面墙、和谁的关系，不写坐标）；`place` 换算成坐标、做几何校验，有违规退出 1，报告里每条一行原因，改意图重来。橱柜的灶台摆在窗前时（油烟机装不上），`place` 先自己换摆法（水槽灶台对调、挪灶台、平移、换墙），换不开才报违规。格式见 [packs/cn/furniture](packs/cn/furniture/README.md)。家具类型运行时从 Bonsai 自带的家具库引进。
 
 ```bash
 PYTHONPATH=src python -m jiazhuang.demo_apartment build/furnish/recog.json
@@ -53,7 +55,7 @@ blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- build/furni
 
 ## 水电点位
 
-在带家具的方案上按规则表（[packs/cn/mep](packs/cn/mep/README.md)，条文号 + 自拟概括 + 参数，待原文核对）布插座、开关、灯、强弱电箱和给排水点，分回路（一联开关和它接的整串灯进同一路），记开关控制哪些灯，再做几何校验；有违规退出 1，没放的点位和原因列在报告的 skipped 里。个例用可选的意图增删，不写坐标。建模时回路、给排水系统和开关—灯的连接写进 IFC；`--mep` 出插座布置图、开关连线图、给排水点位图和回路表、点位统计表。
+在带家具的方案上按规则表（[packs/cn/mep](packs/cn/mep/README.md)，条文号 + 自拟概括 + 参数，待原文核对）布插座、开关、灯、强弱电箱和给排水点（墙上的点位避开门洞和窗洞，压窗的顺着墙挪开，最多挪 600；冰箱这类专用插座旁边放不下时放到电器背后；厨房台面插座只放在台面上方，放不下少放、报出来），分回路（一联开关和它接的整串灯进同一路），记开关控制哪些灯，再做几何校验；有违规退出 1，没放的点位和原因列在报告的 skipped 里。个例用可选的意图增删，不写坐标。建模时回路、给排水系统和开关—灯的连接写进 IFC；`--mep` 出插座布置图、开关连线图、给排水点位图和回路表、点位统计表。
 
 ```bash
 python scripts/mep.py build/furnish/recog.json build/furnish/scheme.json build/mep
@@ -77,6 +79,14 @@ python scripts/mep.py build/furnish/recog.json build/ceiling/scheme.json build/c
 python scripts/flooring.py build/furnish/recog.json build/ceiling/mep/scheme.json build/flooring --intent packs/cn/flooring/example-intent.json
 ```
 
+## 墙面
+
+在地面之后跑（要读门窗、吊顶底、点位和地面完成面）：墙边就是家具布置用的 W1..Wn，按房间类型给每面墙一种缺省做法（客厅卧室等乳胶漆到原顶加 80 踢脚线，厨房 300×600 墙砖横贴、卫生间竖贴，都贴到吊顶底以上 100（吊顶上方有一道砖缝时停在缝上），阳台乳胶漆，见 [packs/cn/wall](packs/cn/wall/README.md)），意图逐间、逐面改做法、贴法、顶高、踢脚线，点名出立面。每面墙算出墙面轮廓（减去门窗洞）、墙砖排砖网格（竖向贴进吊顶时一条缝对齐吊顶底、没吊顶时从地面完成面整砖起；沿墙两端对中或从露着的一端起；墙两头和最上、最下一排露着的非整砖不小于 100）、要不要出立面（厨卫每面、柜体背靠的墙、做法不是涂料的墙、意图点名的）和立面字母（朝北那面 A，顺时针 B、C、D）。点位落在洞口里或面层外、墙砖顶露出墙退出 1。面层建成 `IfcCovering`（CLADDING、SKIRTINGBOARD），平面类图都不画它，立面上按投影画出来（`--kinds elev`，见下）。
+
+```bash
+python scripts/wall.py build/furnish/recog.json build/flooring/scheme.json build/wall --intent packs/cn/wall/example-intent.json
+```
+
 ## 图种
 
 `--kinds` 选出哪几种图，逗号分开，按固定顺序排成一套（一个 IFC、一个比例、图号连续、一份目录，表格在后）：
@@ -87,12 +97,15 @@ python scripts/flooring.py build/furnish/recog.json build/ceiling/mep/scheme.jso
 | `floor` | 地面铺装图（方案里要有地面） | 地面材料表 |
 | `ceiling` | 顶面布置图、灯具定位图（方案里要有吊顶） | — |
 | `mep` | 插座布置图、开关连线图、给排水点位图 | 回路表、点位统计表 |
+| `elev` | 室内立面图（方案里要有墙面），排在全部图纸和表格之后 | — |
 
 `--mep` 等于 `--kinds mep`。
 
 ```bash
-blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- build/furnish/recog.json build/flooring/sheets --scheme build/flooring/scheme.json --kinds plan,floor,ceiling,mep --title "{kind}"
+blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- build/furnish/recog.json build/flooring/sheets --scheme build/wall/scheme.json --kinds plan,floor,ceiling,mep,elev --title "{kind}"
 ```
+
+立面（`elev`）：墙面数据里要出立面的墙（`wall.py` 定的：厨卫每面、柜体背靠的墙、做法不是涂料的墙、意图点名的），每面一张 1:50 立面，字母和墙面数据相同（朝北那面 A，顺时针）。每张画本房间的墙、门窗、面层和离这面墙 120 以内的家具、洁具、电器、壁灯、点位（小方块加距地高度 `H300`），两道横向尺寸（洞口分段、总长）、一道竖向尺寸（楼面、窗台、洞口顶、吊顶底、原顶）、楼面和吊顶底标高、原顶粗线（平顶吊顶以上加遮罩盖住墙段接缝）、墙面材料和踢脚线引出标注、踢脚线浅灰填充（扣家具投影）以及墙砖排砖缝（扣家具和点位，遇字断开）。厨卫等多面墙房间单独成张 2×2 排在 A3 上，1～2 面墙的小房间合并排在 2×2 图纸上，各视图标题写"厨房 A 立面图 1:50"。加 `elev` 时平面布置图上补画各房间的四向内视符号（圆、实心方向三角、字母、所在立面图号），其余非立面图纸、表格和图号不变。
 
 ## 按户出图
 

@@ -84,7 +84,7 @@
   ]},
   {"room": "R019", "items": [
    {"id": "u3_kitchen", "key": "cn_kitchen", "params": {"width": 2850, "return": 2000, "side": "left", "sink": 1400, "hob": 2300}, "wall": "W3", "align": "start"},
-   {"id": "u3_fridge", "key": "lib:Generic Medium Fridge Zone", "wall": "W1", "align": "end"}
+   {"id": "u3_fridge", "key": "lib:Generic Medium Fridge Zone", "wall": "W1", "align": "start"}
   ]},
   {"room": "R023", "items": [
    {"id": "u3_bed", "key": "cn_bed", "params": {"width": 1800}, "wall": "W4", "align": "end", "offset": 500},

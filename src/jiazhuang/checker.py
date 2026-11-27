@@ -196,9 +196,9 @@ def _zones(M):
 
 
 def _is_care(s, p):
-    """房间是不是"护理型"：看 JZ_Space.CareType；没写时按规则参数 default_care。"""
+    """房间是否属于规则参数 care_value 指定的专项类型：看 JZ_Space.CareType；没写时按规则参数 default_care。"""
     if s.get("care"):
-        return s["care"] == p.get("care_value", "护理型")
+        return s["care"] == p.get("care_value", "专项型")
     return bool(p.get("default_care", False))
 
 
@@ -256,7 +256,7 @@ def max_beds_per_room(p, M):
         if _has(s["usage"], p["usages"]):
             n, care = len(_beds(s)), _is_care(s, p)
             mx = p["max_beds_care"] if care else p["max_beds_other"]
-            items.append(("通过" if n <= mx else "不通过", _lbl(s), f"{n} 床（{p.get('care_value', '护理型') if care else '其他'}，上限 {mx} 床）"))
+            items.append(("通过" if n <= mx else "不通过", _lbl(s), f"{n} 床（{p.get('care_value', '专项型') if care else '其他'}，上限 {mx} 床）"))
     return items or _none(p, "相关房间")
 
 
@@ -492,7 +492,7 @@ def zone_dining_area(p, M):
 
 
 def ensuite_required(p, M):
-    """房间要有门直通的卫生间；护理型"应设"，其他"宜设"（未设不算不通过）。"""
+    """房间要有门直通的卫生间；满足 care_value 的房间"应设"，其他"宜设"（未设不算不通过）。"""
     items = []
     for s in M.spaces:
         if not _has(s["usage"], p["usages"]):
@@ -501,7 +501,7 @@ def ensuite_required(p, M):
         if wc:
             items.append(("通过", _lbl(s), f"有门直通卫生间 {wc[0]['id']}"))
         elif _is_care(s, p):
-            items.append(("不通过", _lbl(s), f"没有相邻的专用卫生间（{p.get('care_value', '护理型')}：应设）"))
+            items.append(("不通过", _lbl(s), f"没有相邻的专用卫生间（{p.get('care_value', '专项型')}：应设）"))
         else:
             items.append(("通过", _lbl(s), "专用卫生间是“宜设”（建议项），本间未设，用公用卫生间"))
     return items or _none(p, "相关房间")
@@ -547,7 +547,7 @@ def corridor_width(p, M):
 
 
 def door_clear_width(p, M):
-    """门的开启净宽（按洞口估算）。usages 里的房间的门按 min_mm；room_usages 的房间门按 room_min_mm（护理型按 care_room_min_mm）；
+    """门的开启净宽（按洞口估算）。usages 里的房间的门按 min_mm；room_usages 的房间门按 room_min_mm（满足 care_value 的房间按 care_room_min_mm）；
     entrance 指定的两类空间之间的门（如单元入户门）也按 min_mm。"""
     items = []
     rw = p.get("room_usages", [])
@@ -567,7 +567,7 @@ def door_clear_width(p, M):
         to_room = rw and any(_has(u, rw) for u in names) and not any("卫生间" in u for u in names)
         care = to_room and any(_is_care(x, p) for x in d["spaces"] if _has(x["usage"], rw))
         need = p.get("care_room_min_mm", p["min_mm"]) if care else (p.get("room_min_mm", p["min_mm"]) if to_room else p["min_mm"])
-        what = "房间门（护理型）" if care else ("房间门" if to_room else "门")
+        what = f"房间门（{p.get('care_value', '专项型')}）" if care else ("房间门" if to_room else "门")
         items.append(("通过" if clear >= need - 1 else "不通过", f"{_ref(d['e'])}（{'/'.join(sorted(set(names)))}）",
                       f"{what}：洞口 {w:.0f}，{how}开启净宽约 {clear:.0f} mm（≥{need}）"))
     return items or _none(p, "相关的门")

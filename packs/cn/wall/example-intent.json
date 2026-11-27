@@ -1,0 +1,4 @@
+{"rooms": [
+ {"room": "客厅", "walls": {"W1": {"finish": "wallpaper", "note": "电视背景墙"}, "W3": {"elev": true, "note": "沙发背景墙"}}},
+ {"room": "卫生间", "walls": {"W3": {"top": "full"}}}
+]}

@@ -35,7 +35,7 @@ def parse_args(argv):
         prog="blender -b --python-exit-code 1 --python scripts/make_plan_set.py --", allow_abbrev=False,
         description="识别结果（+ 方案）→ IFC → A3 中文平面图、门窗表、图纸目录（+ 规范自查报告、拆改清单）。"
                     "在装了 Bonsai 的 Blender 里运行。",
-        epilog="图号：{前缀}-00 图纸目录，{前缀}-00a… 自查报告和拆改清单（A4），{前缀}-01… 平面图，最后是门窗表；"
+        epilog="图号：{前缀}-00 图纸目录，{前缀}-00a… 自查报告和拆改清单（A4），{前缀}-01… 平面图，然后是门窗表，立面（--kinds elev）在最后；"
                "分区或分段时 {前缀}-01 是组合平面图。输出：图号.pdf/png、*-report.json/html、门窗表.xlsx、图纸目录.xlsx、"
                "model.ifc、work/（中间文件）。")
     p.add_argument("recognition", type=_recognition, metavar="识别.json", help="识别结果（python -m jiazhuang.dxfplan 的输出）")
@@ -57,10 +57,11 @@ def parse_args(argv):
                    help="水电图：每个平面换成插座布置图、开关连线图、给排水点位图三张（方案要有 scripts/mep.py 布的点位），"
                         "表格是回路表、点位统计表，不出门窗表、不标门窗编号；--title、--zone-title 可用 {kind}（图的种类，没写时空一格接在图名后面）。"
                         "同 --kinds mep")
-    p.add_argument("--kinds", metavar="plan,floor,ceiling,mep",
+    p.add_argument("--kinds", metavar="plan,floor,ceiling,mep,elev",
                    help="出哪几种图（逗号分隔）：plan 平面（布置）图、floor 地面铺装图（方案要有 scripts/flooring.py 生成的地面）、"
-                        "ceiling 顶面布置图（方案要有 scripts/ceiling.py 生成的吊顶）、mep 水电三张；不论写的先后，按平面 → 地面 → 顶面 → 水电排，"
-                        "表格跟在后面（门窗表、地面材料表、回路表、点位统计表）。缺省 plan")
+                        "ceiling 顶面布置图（方案要有 scripts/ceiling.py 生成的吊顶）、mep 水电三张、elev 室内立面（方案要有 scripts/wall.py "
+                        "生成的墙面：墙面数据里要出立面的墙每面一张视图，1:50，按 2×2 排在 A3 上，平面图附内视符号）；不论写的先后，按平面 → 地面 → 顶面 → 水电排，"
+                        "表格跟在后面（门窗表、地面材料表、回路表、点位统计表），立面排在最后。缺省 plan")
     p.add_argument("--split", default="auto", choices=("auto", "none"),
                    help="方案没有分区、整层一张 A3 放不下 1:100 时，auto 自动沿 x 切成几段出分段平面，none 不切（缺省：%(default)s）")
     p.add_argument("--unit", metavar="户号",
@@ -117,10 +118,20 @@ def parse_args(argv):
         if not isinstance(zs, list) or not zs or (own is not None and not any(isinstance(z, dict) and set(z.get("rooms") or []) & own for z in zs)):
             p.error("--kinds floor 要给带地面的方案（scripts/flooring.py 的输出），用 --scheme 指定" if not a.scheme
                     else f"--kinds floor 要给带地面的方案（scripts/flooring.py 的输出）：{a.scheme} 里没有{'' if own is None else ' ' + a.unit + ' 的'}地面")
+    if "elev" in a.kinds:   # 立面要有 scripts/wall.py 生成的墙面、里面有要出立面的墙：没有时解析参数就报错（退出码 2）
+        try:
+            ws = printing.read_json(a.scheme, "方案").get("walls") if a.scheme else None
+        except argparse.ArgumentTypeError as e:
+            p.error(str(e))
+        if not isinstance(ws, list) or not any(isinstance(w, dict) and w.get("elev") and not w.get("open") and (own is None or w.get("room") in own)
+                                               for w in ws):
+            p.error("--kinds elev 要给带墙面的方案（scripts/wall.py 的输出），用 --scheme 指定" if not a.scheme
+                    else f"--kinds elev 要给带墙面的方案（scripts/wall.py 的输出）：{a.scheme} 里没有{'' if own is None else ' ' + a.unit + ' 的'}"
+                         "要出立面的墙")
     return a
 
 
-KIND_ORDER = ("plan", "floor", "ceiling", "mep")   # --kinds 认的图种，也是一套图里的顺序（顶面一种出顶面布置图、灯具定位图两张）
+KIND_ORDER = ("plan", "floor", "ceiling", "mep", "elev")   # --kinds 认的图种，也是一套图里的顺序（顶面一种出顶面布置图、灯具定位图两张；立面排在表格之后）
 
 
 A = parse_args(sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else sys.argv[1:] if sys.argv[0].endswith(".py") else [])
@@ -150,8 +161,8 @@ if A.unit is not None:   # 按户出图：识别结果和方案裁成只剩这�
     drawset.log("unit", A.unit, "doors lead to rooms not in the unit:", "、".join(unitview.outside_rooms(rec0, sch, A.unit)) or "-")
     rec0, sch = unitview.subset(rec0, sch, A.unit)
 rec = sch.get("after") or rec0   # 有拆改时，出图和外包都用拆改后的几何
-# 方案里的吊顶、地面数据和现在的灯、门、地漏对不上（改了吊顶没重跑 mep.py、水电重跑后没重跑 flooring.py）时不出错图：
-# 一处一行 JZLOG stale，退出 1。没有吊顶、没有地面数据的方案不进这两个判断
+# 方案里的吊顶、地面、墙面数据和现在的灯、门窗、地漏、点位对不上（改了吊顶没重跑 mep.py、水电重跑后没重跑 flooring.py、
+# 墙面之后改过门窗、吊顶、点位没重跑 wall.py）时不出错图：一处一行 JZLOG stale，退出 1。没有这些数据的方案不进这几个判断
 STALE = []
 if sch.get("ceilings"):
     from jiazhuang import ceiling as _ceiling
@@ -159,10 +170,13 @@ if sch.get("ceilings"):
 if sch.get("flooring"):
     from jiazhuang import flooring as _flooring
     STALE += [v["msg"] for v in _flooring.check(rec, sch)]
+if sch.get("walls"):
+    from jiazhuang import wall as _wall
+    STALE += [v["msg"] for v in _wall.check(rec0, sch)]
 if STALE:
     for _m in STALE[:30]:
         printing.log("stale", _m)
-    printing.log("failed", f"方案里的吊顶、地面数据过时了（{len(STALE)} 处），按上面的提示重跑后再出图")
+    printing.log("failed", f"方案里的吊顶、地面、墙面数据过时了（{len(STALE)} 处），按上面的提示重跑后再出图")
     sys.exit(1)
 
 # 版面：A3 图框可放图区域 336×275mm（drawset.AREA；下边留给视图图名，高按 250 算）；四周给尺寸和轴号的留边按每一侧实际要画的
@@ -207,7 +221,7 @@ if SPLIT != "none" and A.unit is None and not (sch.get("zones") or sch.get("core
     auto_split = bool(scheme.split_zones(rec, sch, lambda lk, rk: (AVAIL_W - est_margin(lk, "left") - est_margin(rk, "right") - 2 * VIEW_PAD) * seg_den))
     drawset.log("split", [(z["id"], z["kinds"], [round(v) for v in z["crop"]], z["wall_cut"]) for z in sch.get("zones", [])])
 zones = sch.get("zones") or sch.get("cores") or []
-MIXED = A.kinds not in (["plan"], ["mep"])   # 几种图一起出（或单出顶面）：每张图名都带种类
+MIXED = [k for k in A.kinds if k != "elev"] not in (["plan"], ["mep"])   # 几种图一起出（或单出顶面）：每张图名都带种类；加不加立面不影响
 TITLE_T = A.title or ("{unit} {kind}" if A.unit is not None and (A.mep or MIXED) else "{unit} 平面图" if A.unit is not None
                       else "{storey}组合平面图" if zones else "{storey}{kind}" if A.mep or MIXED else "{storey}平面图")
 TITLE = TITLE_T.format(storey=STOREY, kind="", unit=A.unit or "")
@@ -296,7 +310,7 @@ def kind_spec(kind, exclude):
     标高度的类和默认高度、接线。"""
     k = KINDS[kind]
     if k.get("plan"):
-        return {"exclude": f"{', '.join(MEP_CLASSES)} + {exclude}" if MIXED and A.mep else exclude}
+        return {"is_plan": True, "exclude": f"{', '.join(MEP_CLASSES)} + {exclude}" if MIXED and A.mep else exclude}
     if k.get("floor"):   # 地面铺装图：平面视图，只留墙、门窗和地漏（排水点、别的点位、家具洁具都排除），房名下写材料
         drop = ", ".join([c for c in MEP_CLASSES if c != "IfcWasteTerminal"] + ["IfcFurniture", "IfcFurnishingElement", "IfcSanitaryTerminal", "IfcElectricAppliance"])
         return {"exclude": f'{drop} + IfcWasteTerminal, query:"type.Tag"="cn_drain" + {exclude}', "stylesheet": FLOOR_CSS, "tags": False,
@@ -345,6 +359,8 @@ pad = lambda den, mm: mm * den / 1000.0
 EXCL = "IfcGrid"   # 轴网由我们自己画（轴号按原图错开），不让 Bonsai 再画一遍
 if sch.get("flooring"):   # 地面面层（楼面以下 1mm）不按构件投影画：地面铺装图另画砖缝、门槛石，别的图和没有地面数据时一样
     EXCL += " + IfcCovering, PredefinedType=FLOORING"
+if sch.get("walls"):   # 墙面面层（贴墙 8～18mm 的板）在剖切高度上会被剖成墙边一条细黑边：平面类视图都不画，各张图和没有墙面数据时一样
+    EXCL += " + IfcCovering, PredefinedType=CLADDING + IfcCovering, PredefinedType=SKIRTINGBOARD"
 G = annotate.envelope(f)   # 整栋楼的墙、柱、门窗外包（米）
 blocks, spans = [], []     # blocks: (分区, 尺寸安排 plan)
 for i, k in enumerate(zones):
@@ -398,186 +414,6 @@ def neighbor(j, side):
             best = (o[0], kk["id"])
     return best and best[1]
 
-
-def detail_views(specs):
-    """大比例平面（分区图、分段图，或没有分区时的整层）：房间名、门窗编号、楼面标高、三道尺寸 + 轴号、切口折断线。
-    相机 = 外包四周加上每一侧实际的留边；模型线裁在裁切框上（drawset.add_view(crop=…)）。
-    顺序（先放的位置要求最死，后放的避开前面已写的字）：小房间、走道的房名先占好位置（只对门窗编号生效，annotate.space_labels
-    reserve）→ 门窗编号（贴着洞口）→ 点位高度 → 楼面标高（要一块空地）→
-    房间名（在本房间里找空地）→ 尺寸、轴号（数字避让放在室外的编号）→ 折断线。
-    楼面标高一套图只用一种写法（annotate.level_style）。
-    水电图（kind_spec）不标门窗编号，另有：stylesheet、symbols_for（add_view），heights、defaults（只标这几类点位的高度，同一面墙上挨着的同类
-    同高点位只标一个），wires（点位高度之后画开关到灯的接线，后放的字避开它）。
-    specs = [{name, den, plan, zone?, strict?, exclude?, crop?, cut_notes?, …}]，返回视图列表（顺序相同）。"""
-    made = []
-    for sp in specs:
-        name, den, plan = sp["name"], sp["den"], sp["plan"]
-        env, s = plan["env"], plan["sides"]
-        ext = (env[0] - pad(den, s["left"]["margin"]), env[1] - pad(den, s["bottom"]["margin"]),
-               env[2] + pad(den, s["right"]["margin"]), env[3] + pad(den, s["top"]["margin"]))
-        v = drawset.add_view(name, sp.get("target", "PLAN_VIEW"), storey.id(), den, ext, margin_paper_mm=VIEW_PAD, exclude=sp.get("exclude", EXCL),
-                             crop=plan["crop"] if sp.get("crop", True) else None, stylesheet=sp.get("stylesheet"),
-                             symbols_for=sp.get("symbols_for", ()), z=Z)
-        if sp.get("ceiling"):   # 顶面布置图、灯具定位图：小段尺寸数字也自己放（annotate._dim_plan）；造型线、灯带先登记成放字的障碍
-            annotate.RCP_OWN_TEXT.add(v.id())
-            annotate.ceiling_lines(f, v, den)
-        if (sp.get("ceiling") or sp.get("wires")) and NO_STRIP:
-            drawset.log("strips", name, annotate.light_strips(f, v, den, z=Z))
-        drawset.log("reserve", name, annotate.space_labels(f, v, den, mode=sp.get("labels", "full"), bbox_m=plan["crop"], abbr=LABELS.get("abbr"),
-                                                           short=LABELS.get("short"), zone=sp.get("zone"), strict=sp.get("strict", False),
-                                                           plan=plan, reserve=True))
-        if sp.get("tags", True):   # 水电图、顶面图不标门窗编号：电工、水工用不着，腾出地方给点位、高度和接线
-            drawset.log("tags", name, annotate.opening_tags(f, v, den, z=Z, bbox_m=plan["crop"], plan=plan))
-        more = {"classes": sp["heights"], "merge": True} if "heights" in sp else {}
-        if not sp.get("no_heights"):
-            drawset.log("heights", name, annotate.point_heights(f, v, den, defaults=sp.get("defaults", HEIGHTS), bbox_m=plan["crop"], z=Z, **more))
-        if sp.get("lights"):   # 灯具定位图：主灯到墙、成排筒灯的尺寸链；不写标高和材料
-            drawset.log("light dims", name, annotate.light_dims(f, v, den, z=Z))
-        elif sp.get("ceiling"):   # 顶面布置图：造型尺寸先画（尺寸线登记进占位表），再写各块吊顶的材料和底标高
-            drawset.log("ceiling dims", name, annotate.ceiling_dims(f, v, den, z=Z))
-            drawset.log("ceiling marks", name, annotate.ceiling_marks(f, v, den, z=Z, bbox_m=plan["crop"]),
-                        "skipped", annotate.CEIL_SKIPPED.get(v.id(), 0))
-        if sp.get("wires"):
-            drawset.log("wires", name, annotate.wires(f, v, den, z=Z))
-        made.append(v)
-    style = annotate.level_style(f, [(v, sp["den"], sp["plan"]["crop"]) for v, sp in zip(made, specs)], levels, z=Z)
-    for v, sp in zip(made, specs):
-        name, den, plan = sp["name"], sp["den"], sp["plan"]
-        bb, s = plan["crop"], plan["sides"]
-        if sp.get("floor_level", True):
-            drawset.log("level", name, style, annotate.level_mark(f, v, den, levels, z=Z, bbox_m=bb, style=style))
-        if sp.get("floor"):   # 地面铺装图：起铺点记号先画，房名（带材料）在本房间里先占位置，定位尺寸、标高、找坡再找地方
-            drawset.log("floor starts", name, annotate.floor_starts(f, v, den, z=Z))
-        drawset.log("labels", name, annotate.space_labels(f, v, den, mode=sp.get("labels", "full"), bbox_m=bb, z=Z, abbr=LABELS.get("abbr"),
-                                                          short=LABELS.get("short"), zone=sp.get("zone"), strict=sp.get("strict", False),
-                                                          plan=plan, **({"second": annotate.floor_label_text(f)} if sp.get("floor") else {})))
-        if sp.get("floor"):   # 地面铺装图：定位尺寸、标高、找坡、门槛石、压条（房名之后，都避开已写的字）
-            drawset.log("floor dims", name, annotate.floor_dims(f, v, den, z=Z))
-            drawset.log("floor levels", name, annotate.floor_levels(f, v, den, z=Z))
-            drawset.log("floor falls", name, annotate.floor_falls(f, v, den, z=Z))
-            drawset.log("floor marks", name, annotate.floor_marks(f, v, den, z=Z))
-        drawset.log("dims", name, annotate.grid_annotations(f, v, den, plan["env"], z=Z, mode="block", plan=plan))
-        if sp.get("floor"):   # 砖缝最后画，在字、尺寸、标高、符号处断开
-            drawset.log("floor joints", name, annotate.floor_joints(f, v, den, z=Z))
-        if sp.get("ceiling") and not sp.get("lights"):   # 顶面布置图：铝扣板的板缝网格，在灯具符号和字处断开
-            drawset.log("alu grid", name, annotate.alu_grid(f, v, den, z=Z))
-        if sp.get("cut_notes"):
-            drawset.log("cuts", name, annotate.cut_marks(v, den, plan, sp["cut_notes"], z=Z))
-        drawset.log("plan", name, {sd: (plan["kinds"][sd], len(s[sd]["chains"]), [a[0] for a in s[sd]["sel"]], round(s[sd]["margin"], 1))
-                                   for sd in annotate.SIDES})
-    return made
-
-
-views = []
-E = edge_of([p for g in rec["footprint"] for p in g])
-legend_w = {}
-if not blocks:
-    plan_w = annotate.block_plan(f, (min(E[0], G[0]) - 0.01, min(E[1], G[1]) - 0.01, max(E[2], G[2]) + 0.01, max(E[3], G[3]) + 0.01))
-    # 水电图、按户出图整层一张时图例也在右侧一栏；按户出图（--unit）的比例档细一些（unitview.DENS）
-    whole_den, lw0 = pick_scale(plan_w, (A.mep or "ceiling" in A.kinds or "floor" in A.kinds or A.unit is not None) and HAS_LEG,
-                                unitview.DENS if A.unit is not None else DENS)
-    if A.unit is not None and whole_den > 150:   # 按实际留边放不下 1:150：同样报错（输出目录里只有 model.ifc 和 work/，没有图）
-        e_ = plan_w["env"]
-        printing.log("failed", f"unit too large: {A.unit} 外包 {e_[2] - e_[0]:.1f}×{e_[3] - e_[1]:.1f}m，A3 上 1:150 也放不下")
-        sys.exit(1)
-    if A.mep or "ceiling" in A.kinds or "floor" in A.kinds or A.unit is not None:
-        legend_w["*"] = lw0
-if not blocks and whole_den <= 150:
-    # 没有分区、整层放得下大比例：总图就是详图（编号、标高、三道尺寸都在这张上）；拆除的墙照画（图例带"拆除"），不像 1:200 总图那样排除
-    wholes = detail_views([dict({"name": TITLE_T.format(storey=STOREY, kind=kind, unit=A.unit or ""), "den": whole_den, "plan": plan_w, "crop": False},
-                                **kind_spec(kind, EXCL)) for kind in KINDS])
-    whole, den = wholes[0], whole_den
-else:
-    den = fit_scale(E, AVAIL_W)
-    ov = M_EXT2 + 2   # 总图只有下、左两侧尺寸（各单元首末轴 + 总尺寸）
-    top = 12.0 if blocks else 3.0   # 分区时上方注各段图号
-    # 1:200 及更小的总图不画点位、扶手，家具按 drawset.overview_exclude（图例也不列点位，点位看分区图）
-    whole = drawset.add_view(TITLE, "PLAN_VIEW", storey.id(), den,
-                             (E[0] - pad(den, ov), E[1] - pad(den, ov), E[2] + pad(den, 3), E[3] + pad(den, top)), margin_paper_mm=2,
-                             exclude=drawset.overview_exclude(den, has_furniture, EXCL + ' + IfcWall, Pset_WallCommon.Status="DEMOLISH"'))
-    drawset.log("tags", annotate.opening_tags(f, whole, den, z=Z))
-    drawset.log("labels", annotate.space_labels(f, whole, den, mode="abbr" if den >= 200 else "full", z=Z,
-                                                abbr=LABELS.get("abbr"), short=LABELS.get("short")))
-    if has_grid:
-        drawset.log("grid", annotate.grid_annotations(f, whole, den, E, z=Z, mode="overall", spans=spans or [(E[0], E[2])]))
-    if blocks:
-        # 组合示意：分区线 + 各段图号（GB/T 50104：分区绘制时要有组合示意图）
-        cuts, labs = [], []
-        for j, (k, pl) in enumerate(blocks):
-            c = pl["crop"]
-            if k.get("auto"):
-                lo, hi = L(k["x_range"][0]), L(k["x_range"][1])
-                lo, hi = max(lo, E[0]), min(hi, E[2])
-            else:
-                lo, hi = c[0], c[2]
-            if j:
-                pc = blocks[j - 1][1]["crop"]
-                cuts.append(lo if blocks[j - 1][0].get("auto") else (pc[2] + c[0]) / 2)
-            ids = [idents[(k["id"], kind)] for kind in KINDS]
-            labs.append(((lo + hi) / 2, ids[0] if len(ids) == 1 else f"{ids[0]}～{ids[-1]}", k["id"]))
-        drawset.log("zone key", annotate.zone_key(whole, den, E, cuts, labs, z=Z))
-if not blocks and whole_den <= 150:
-    views += [(f"{PREFIX}-{i:02d}", w, den, "*" if A.mep or "ceiling" in A.kinds or "floor" in A.kinds or A.unit is not None else None)
-              for i, w in enumerate(wholes, 1)]
-else:
-    views.append((f"{PREFIX}-01", whole, den, None))
-
-specs = []
-for j, (k, plan) in enumerate(blocks):
-    zden, lw = pick_scale(plan, HAS_LEG)
-    legend_w[k["id"]] = lw
-    drawset.log("zone", k["id"], "extent(m)", [round(x, 2) for x in plan["env"]], "scale", zden, "legend", lw,
-                "kinds", plan["kinds"])
-    for kind in KINDS:
-        notes_cut = {s: f"接 {idents[(nb, kind)]}" for s in ("left", "right") if plan["kinds"][s] == "cut" for nb in [neighbor(j, s)] if nb}
-        notes_cut.update({s: "" for s in ("left", "right") if plan["kinds"][s] == "cut" and s not in notes_cut})
-        specs.append(dict({"name": ZONE_TITLE.format(id=k["id"], storey=STOREY, kind=kind), "den": zden, "plan": plan, "zone": k["id"],
-                           "strict": bool(k.get("auto")), "cut_notes": notes_cut, "kind": kind}, **kind_spec(kind, EXCL)))
-for sp, v in zip(specs, detail_views(specs)):
-    views.append((idents[(sp["zone"], sp["kind"])], v, sp["den"], sp["zone"]))
-
-for _, v, _, _ in views:
-    drawset.render_view(v)
-
-crops = {k["id"]: pl["crop"] for k, pl in blocks}   # 分区/分段的裁切框（米）；"*" 是水电图整层一张（不裁切）
-crops["*"] = None
-# 一套图的图例同宽（取各分区图图例栏里最窄的），同一条名称在各张图上断法一致
-LEG_W = (min(legend_w.values()) if HAS_LEG and legend_w else LEGEND_W) - 2
-# 图面上不写说明：统计、自查结论、拆改计数只在报告、xlsx、IFC 里；分区、分段靠总图上的分区线和各段图号、分段图的"接 x-xx"索引
-sheet_list = []   # (图号, 图名, 比例, 图幅, 备注)
-for ident, v, den, zid in views:
-    # 图例的点位行只列这张图上实际画出的种类（平面图上不画的吸顶监控等不列）；写过简称的（总图，1:150 上写不下全名的小房间）
-    # 末尾一行是简称对照
-    drawn = drawset.drawn_symbol_keys(v) | ({annotate.STRIP_KEY} if annotate.STRIPS.get(v.id()) else set()) if legend and den < 200 else set()
-    keys = [k for k in legend if k in drawn] if drawn else []
-    abbr = annotate.abbr_legend(v)
-    if v.id() in annotate.CEIL_LEGEND:   # 顶面布置图：没吊顶的房间不逐间写，图例末尾一行"原顶刷白 2.800"
-        abbr = " ".join(t for t in (abbr, annotate.CEIL_LEGEND[v.id()]) if t)
-    if v.id() in annotate.LIGHT_NOTE:   # 灯具定位图：在吊顶边带正中的筒灯不逐排标离墙尺寸，图例末尾一行说明
-        abbr = " ".join(t for t in (abbr, annotate.LIGHT_NOTE[v.id()]) if t)
-    rows = annotate.LEGEND_ROWS.get(v.id())   # 地面材料编号对照、门槛石、压条、起铺点；顶面布置图的铝扣板吊顶
-    if zid:
-        # 分区/分段图：有设施点位时图例在右侧预留的一栏（墙体行并在里面）；没有点位的不留栏，墙体图例找图面上的空地放，
-        # 视图位置和比例都不变，放不下就不画（JZLOG legend skipped）
-        lw = legend_w[zid] if HAS_LEG else 0.0
-        sheet, svg = drawset.make_sheet(v, ident, v.Name, PROJECT_SHORT, f"1:{den}", today, reserve_right_mm=lw)
-        walls = annotate.wall_materials(f, v, bbox_m=crops[zid])
-        if HAS_LEG:
-            drawset.add_legend(svg, SYMBOLS, keys, den, x=AREA_R - lw + 3, y=24, width=LEG_W, walls=walls, extra=abbr or None,
-                               leader=A.mep and drawset.has_shift_leaders(v), rows=rows)   # 水电图上有挪开画的符号才加引线一行
-        else:
-            drawset.place_legend(svg, SYMBOLS, [], den, near=(AREA_R + 1 - LEG_W, 24), width=LEG_W, walls=walls, extra=abbr or None,
-                                 rows=rows)
-    else:
-        # 总图：图例在视图标题下面——画了点位时的点位行、墙体行，简称对照（小比例总图的 --labels 的 legend_text 接在后面作
-        # 补充说明，这一行宽 180）
-        sheet, svg = drawset.make_sheet(v, ident, v.Name, PROJECT_SHORT, f"1:{den}", today)
-        abbr_text = " ".join(t for t in (abbr, LABELS.get("legend_text") if den >= 200 else "") if t)
-        drawset.add_legend(svg, SYMBOLS, keys, den, x=36, y=drawset.view_title_bottom(sheet) + 9,
-                           width=LEG_W, walls=annotate.wall_materials(f, v), extra=abbr_text or None, extra_width=180, rows=rows)
-    drawset.export_pdf(svg, os.path.join(OUT, f"{ident}.pdf"), f"{ident} {v.Name}")
-    drawset.export_png(svg, os.path.join(OUT, f"{ident}.png"))
-    sheet_list.append((ident, v.Name, f"1:{den}", "A3", ""))
 
 # 表格（门窗表；水电图是回路表、点位统计表）：从 IFC 统计，xlsx → Bonsai Schedules → 图纸；一页放不下就分几张图，每页表下都写脚注。
 # 喂给 Bonsai 的表格（断好行的 xlsx、同名 CSS、Bonsai 画的 SVG）是中间文件，放 work/schedules/；交付的 xlsx 放输出目录顶层
@@ -673,23 +509,227 @@ def floor_table():
                              ["编号", "材料", "规格", "铺装区（房间）", "面积（m²）", "整块数", "切块数", "边砖宽（mm）", "合计", "提醒"], drow, subtitle=PROJECT)
     return [("地面材料表", "floor_schedule", head, rows, {3: 100.0}, {1: "left", 3: "left"}, [])]
 
-TABLES = []   # 门窗表跟平面图走，地面材料表跟地面铺装图走，回路表、点位统计表跟水电图走（顶面图没有表）
-if "plan" in A.kinds:
-    head, rows, dw = openings.schedule_rows(f, annotate.plan_geometry(f))
-    if not rows:
-        drawset.log("WARNING no doors/windows in model, door/window schedule sheet skipped")
-    TABLES += [("门窗表", "door_window_schedule", head, rows, {head.index("所在位置"): 110.0, head.index("备注"): 62.0},
-                {head.index("所在位置"): "left", head.index("备注"): "left"}, openings.schedule_notes(dw))]
-if "floor" in A.kinds:
-    TABLES += floor_table()
-if A.mep:
-    TABLES += mep_tables()
+def _build_tables():
+    out = []   # 门窗表跟平面图走，地面材料表跟地面铺装图走，回路表、点位统计表跟水电图走（顶面图没有表）
+    if "plan" in A.kinds:
+        head, rows, dw = openings.schedule_rows(f, annotate.plan_geometry(f))
+        if not rows:
+            drawset.log("WARNING no doors/windows in model, door/window schedule sheet skipped")
+        out += [("门窗表", "door_window_schedule", head, rows, {head.index("所在位置"): 110.0, head.index("备注"): 62.0},
+                    {head.index("所在位置"): "left", head.index("备注"): "left"}, openings.schedule_notes(dw))]
+    if "floor" in A.kinds:
+        out += floor_table()
+    if A.mep:
+        out += mep_tables()
+    return out
+
+TABLES = None
+TABLE_PAGES = None
+ELEV_PLAN_MAP = {}
+elevation_mod = None
+
+def detail_views(specs):
+    """大比例平面（分区图、分段图，或没有分区时的整层）：房间名、门窗编号、楼面标高、三道尺寸 + 轴号、切口折断线。
+    相机 = 外包四周加上每一侧实际的留边；模型线裁在裁切框上（drawset.add_view(crop=…)）。
+    顺序（先放的位置要求最死，后放的避开前面已写的字）：小房间、走道的房名先占好位置（只对门窗编号生效，annotate.space_labels
+    reserve）→ 门窗编号（贴着洞口）→ 点位高度 → 楼面标高（要一块空地）→
+    房间名（在本房间里找空地）→ 尺寸、轴号（数字避让放在室外的编号）→ 折断线。
+    楼面标高一套图只用一种写法（annotate.level_style）。
+    水电图（kind_spec）不标门窗编号，另有：stylesheet、symbols_for（add_view），heights、defaults（只标这几类点位的高度，同一面墙上挨着的同类
+    同高点位只标一个），wires（点位高度之后画开关到灯的接线，后放的字避开它）。
+    specs = [{name, den, plan, zone?, strict?, exclude?, crop?, cut_notes?, …}]，返回视图列表（顺序相同）。"""
+    made = []
+    for sp in specs:
+        name, den, plan = sp["name"], sp["den"], sp["plan"]
+        env, s = plan["env"], plan["sides"]
+        ext = (env[0] - pad(den, s["left"]["margin"]), env[1] - pad(den, s["bottom"]["margin"]),
+               env[2] + pad(den, s["right"]["margin"]), env[3] + pad(den, s["top"]["margin"]))
+        v = drawset.add_view(name, sp.get("target", "PLAN_VIEW"), storey.id(), den, ext, margin_paper_mm=VIEW_PAD, exclude=sp.get("exclude", EXCL),
+                             crop=plan["crop"] if sp.get("crop", True) else None, stylesheet=sp.get("stylesheet"),
+                             symbols_for=sp.get("symbols_for", ()), z=Z)
+        if sp.get("ceiling"):   # 顶面布置图、灯具定位图：小段尺寸数字也自己放（annotate._dim_plan）；造型线、灯带先登记成放字的障碍
+            annotate.RCP_OWN_TEXT.add(v.id())
+            annotate.ceiling_lines(f, v, den)
+        if (sp.get("ceiling") or sp.get("wires")) and NO_STRIP:
+            drawset.log("strips", name, annotate.light_strips(f, v, den, z=Z))
+        drawset.log("reserve", name, annotate.space_labels(f, v, den, mode=sp.get("labels", "full"), bbox_m=plan["crop"], abbr=LABELS.get("abbr"),
+                                                           short=LABELS.get("short"), zone=sp.get("zone"), strict=sp.get("strict", False),
+                                                           plan=plan, reserve=True))
+        if sp.get("tags", True):   # 水电图、顶面图不标门窗编号：电工、水工用不着，腾出地方给点位、高度和接线
+            drawset.log("tags", name, annotate.opening_tags(f, v, den, z=Z, bbox_m=plan["crop"], plan=plan))
+        more = {"classes": sp["heights"], "merge": True} if "heights" in sp else {}
+        if not sp.get("no_heights"):
+            drawset.log("heights", name, annotate.point_heights(f, v, den, defaults=sp.get("defaults", HEIGHTS), bbox_m=plan["crop"], z=Z, **more))
+        if sp.get("lights"):   # 灯具定位图：主灯到墙、成排筒灯的尺寸链；不写标高和材料
+            drawset.log("light dims", name, annotate.light_dims(f, v, den, z=Z))
+        elif sp.get("ceiling"):   # 顶面布置图：造型尺寸先画（尺寸线登记进占位表），再写各块吊顶的材料和底标高
+            drawset.log("ceiling dims", name, annotate.ceiling_dims(f, v, den, z=Z))
+            drawset.log("ceiling marks", name, annotate.ceiling_marks(f, v, den, z=Z, bbox_m=plan["crop"]),
+                        "skipped", annotate.CEIL_SKIPPED.get(v.id(), 0))
+        if sp.get("wires"):
+            drawset.log("wires", name, annotate.wires(f, v, den, z=Z))
+        made.append(v)
+    style = annotate.level_style(f, [(v, sp["den"], sp["plan"]["crop"]) for v, sp in zip(made, specs)], levels, z=Z)
+    for v, sp in zip(made, specs):
+        name, den, plan = sp["name"], sp["den"], sp["plan"]
+        bb, s = plan["crop"], plan["sides"]
+        if sp.get("floor_level", True):
+            drawset.log("level", name, style, annotate.level_mark(f, v, den, levels, z=Z, bbox_m=bb, style=style))
+        if sp.get("is_plan") and ELEV_PLAN_MAP:   # 室内立面：平面图上画四向内视符号，登记占位后房名自动避开
+            drawset.log("elev callouts", name, elevation_mod.draw_callouts(f, v, rec0, sch, info["offset"], den, ELEV_PLAN_MAP,
+                                                                           bbox_m=bb if sp.get("crop", True) else None, z=Z))
+        if sp.get("floor"):   # 地面铺装图：起铺点记号先画，房名（带材料）在本房间里先占位置，定位尺寸、标高、找坡再找地方
+            drawset.log("floor starts", name, annotate.floor_starts(f, v, den, z=Z))
+        drawset.log("labels", name, annotate.space_labels(f, v, den, mode=sp.get("labels", "full"), bbox_m=bb, z=Z, abbr=LABELS.get("abbr"),
+                                                          short=LABELS.get("short"), zone=sp.get("zone"), strict=sp.get("strict", False),
+                                                          plan=plan, **({"second": annotate.floor_label_text(f)} if sp.get("floor") else {})))
+        if sp.get("floor"):   # 地面铺装图：定位尺寸、标高、找坡、门槛石、压条（房名之后，都避开已写的字）
+            drawset.log("floor dims", name, annotate.floor_dims(f, v, den, z=Z))
+            drawset.log("floor levels", name, annotate.floor_levels(f, v, den, z=Z))
+            drawset.log("floor falls", name, annotate.floor_falls(f, v, den, z=Z))
+            drawset.log("floor marks", name, annotate.floor_marks(f, v, den, z=Z))
+        drawset.log("dims", name, annotate.grid_annotations(f, v, den, plan["env"], z=Z, mode="block", plan=plan))
+        if sp.get("floor"):   # 砖缝最后画，在字、尺寸、标高、符号处断开
+            drawset.log("floor joints", name, annotate.floor_joints(f, v, den, z=Z))
+        if sp.get("ceiling") and not sp.get("lights"):   # 顶面布置图：铝扣板的板缝网格，在灯具符号和字处断开
+            drawset.log("alu grid", name, annotate.alu_grid(f, v, den, z=Z))
+        if sp.get("cut_notes"):
+            drawset.log("cuts", name, annotate.cut_marks(v, den, plan, sp["cut_notes"], z=Z))
+        drawset.log("plan", name, {sd: (plan["kinds"][sd], len(s[sd]["chains"]), [a[0] for a in s[sd]["sel"]], round(s[sd]["margin"], 1))
+                                   for sd in annotate.SIDES})
+    return made
+
+
+views = []
+E = edge_of([p for g in rec["footprint"] for p in g])
+legend_w = {}
+if not blocks:
+    plan_w = annotate.block_plan(f, (min(E[0], G[0]) - 0.01, min(E[1], G[1]) - 0.01, max(E[2], G[2]) + 0.01, max(E[3], G[3]) + 0.01))
+    # 水电图、按户出图整层一张时图例也在右侧一栏；按户出图（--unit）的比例档细一些（unitview.DENS）
+    whole_den, lw0 = pick_scale(plan_w, (A.mep or "ceiling" in A.kinds or "floor" in A.kinds or A.unit is not None) and HAS_LEG,
+                                unitview.DENS if A.unit is not None else DENS)
+    if A.unit is not None and whole_den > 150:   # 按实际留边放不下 1:150：同样报错（输出目录里只有 model.ifc 和 work/，没有图）
+        e_ = plan_w["env"]
+        printing.log("failed", f"unit too large: {A.unit} 外包 {e_[2] - e_[0]:.1f}×{e_[3] - e_[1]:.1f}m，A3 上 1:150 也放不下")
+        sys.exit(1)
+    if A.mep or "ceiling" in A.kinds or "floor" in A.kinds or A.unit is not None:
+        legend_w["*"] = lw0
+if "elev" in A.kinds and "plan" in A.kinds:
+    from jiazhuang import elevation as elevation_mod
+    TABLES = _build_tables()
+    TABLE_PAGES = [schedules.paginate(head, rows, AREA_BOTTOM - TABLE_TOP - drawset.footnote_mm(len(foot)), widths) if rows else []
+                   for _, _, head, rows, widths, _, foot in TABLES]
+    _n_plan = 0 if not KINDS else (len(KINDS) if (not blocks and whole_den <= 150) else 1 + len(blocks) * len(KINDS))
+    ELEV_PLAN_MAP = elevation_mod.plan_sheets(rec0, sch, _n_plan + sum(len(p) for p in TABLE_PAGES) + 1, PREFIX)
+if not KINDS:   # 只出立面（--kinds elev）：没有平面类的图，图号从立面起
+    pass
+elif not blocks and whole_den <= 150:
+    # 没有分区、整层放得下大比例：总图就是详图（编号、标高、三道尺寸都在这张上）；拆除的墙照画（图例带"拆除"），不像 1:200 总图那样排除
+    wholes = detail_views([dict({"name": TITLE_T.format(storey=STOREY, kind=kind, unit=A.unit or ""), "den": whole_den, "plan": plan_w, "crop": False},
+                                **kind_spec(kind, EXCL)) for kind in KINDS])
+    whole, den = wholes[0], whole_den
+else:
+    den = fit_scale(E, AVAIL_W)
+    ov = M_EXT2 + 2   # 总图只有下、左两侧尺寸（各单元首末轴 + 总尺寸）
+    top = 12.0 if blocks else 3.0   # 分区时上方注各段图号
+    # 1:200 及更小的总图不画点位、扶手，家具按 drawset.overview_exclude（图例也不列点位，点位看分区图）
+    whole = drawset.add_view(TITLE, "PLAN_VIEW", storey.id(), den,
+                             (E[0] - pad(den, ov), E[1] - pad(den, ov), E[2] + pad(den, 3), E[3] + pad(den, top)), margin_paper_mm=2,
+                             exclude=drawset.overview_exclude(den, has_furniture, EXCL + ' + IfcWall, Pset_WallCommon.Status="DEMOLISH"'))
+    drawset.log("tags", annotate.opening_tags(f, whole, den, z=Z))
+    drawset.log("labels", annotate.space_labels(f, whole, den, mode="abbr" if den >= 200 else "full", z=Z,
+                                                abbr=LABELS.get("abbr"), short=LABELS.get("short")))
+    if has_grid:
+        drawset.log("grid", annotate.grid_annotations(f, whole, den, E, z=Z, mode="overall", spans=spans or [(E[0], E[2])]))
+    if blocks:
+        # 组合示意：分区线 + 各段图号（GB/T 50104：分区绘制时要有组合示意图）
+        cuts, labs = [], []
+        for j, (k, pl) in enumerate(blocks):
+            c = pl["crop"]
+            if k.get("auto"):
+                lo, hi = L(k["x_range"][0]), L(k["x_range"][1])
+                lo, hi = max(lo, E[0]), min(hi, E[2])
+            else:
+                lo, hi = c[0], c[2]
+            if j:
+                pc = blocks[j - 1][1]["crop"]
+                cuts.append(lo if blocks[j - 1][0].get("auto") else (pc[2] + c[0]) / 2)
+            ids = [idents[(k["id"], kind)] for kind in KINDS]
+            labs.append(((lo + hi) / 2, ids[0] if len(ids) == 1 else f"{ids[0]}～{ids[-1]}", k["id"]))
+        drawset.log("zone key", annotate.zone_key(whole, den, E, cuts, labs, z=Z))
+if not KINDS:
+    pass
+elif not blocks and whole_den <= 150:
+    views += [(f"{PREFIX}-{i:02d}", w, den, "*" if A.mep or "ceiling" in A.kinds or "floor" in A.kinds or A.unit is not None else None)
+              for i, w in enumerate(wholes, 1)]
+else:
+    views.append((f"{PREFIX}-01", whole, den, None))
+
+specs = []
+for j, (k, plan) in enumerate(blocks):
+    zden, lw = pick_scale(plan, HAS_LEG)
+    legend_w[k["id"]] = lw
+    drawset.log("zone", k["id"], "extent(m)", [round(x, 2) for x in plan["env"]], "scale", zden, "legend", lw,
+                "kinds", plan["kinds"])
+    for kind in KINDS:
+        notes_cut = {s: f"接 {idents[(nb, kind)]}" for s in ("left", "right") if plan["kinds"][s] == "cut" for nb in [neighbor(j, s)] if nb}
+        notes_cut.update({s: "" for s in ("left", "right") if plan["kinds"][s] == "cut" and s not in notes_cut})
+        specs.append(dict({"name": ZONE_TITLE.format(id=k["id"], storey=STOREY, kind=kind), "den": zden, "plan": plan, "zone": k["id"],
+                           "strict": bool(k.get("auto")), "cut_notes": notes_cut, "kind": kind}, **kind_spec(kind, EXCL)))
+for sp, v in zip(specs, detail_views(specs)):
+    views.append((idents[(sp["zone"], sp["kind"])], v, sp["den"], sp["zone"]))
+
+for _, v, _, _ in views:
+    drawset.render_view(v)
+
+crops = {k["id"]: pl["crop"] for k, pl in blocks}   # 分区/分段的裁切框（米）；"*" 是水电图整层一张（不裁切）
+crops["*"] = None
+# 一套图的图例同宽（取各分区图图例栏里最窄的），同一条名称在各张图上断法一致
+LEG_W = (min(legend_w.values()) if HAS_LEG and legend_w else LEGEND_W) - 2
+# 图面上不写说明：统计、自查结论、拆改计数只在报告、xlsx、IFC 里；分区、分段靠总图上的分区线和各段图号、分段图的"接 x-xx"索引
+sheet_list = []   # (图号, 图名, 比例, 图幅, 备注)
+for ident, v, den, zid in views:
+    # 图例的点位行只列这张图上实际画出的种类（平面图上不画的吸顶监控等不列）；写过简称的（总图，1:150 上写不下全名的小房间）
+    # 末尾一行是简称对照
+    drawn = drawset.drawn_symbol_keys(v) | ({annotate.STRIP_KEY} if annotate.STRIPS.get(v.id()) else set()) if legend and den < 200 else set()
+    keys = [k for k in legend if k in drawn] if drawn else []
+    abbr = annotate.abbr_legend(v)
+    if v.id() in annotate.CEIL_LEGEND:   # 顶面布置图：没吊顶的房间不逐间写，图例末尾一行"原顶刷白 2.800"
+        abbr = " ".join(t for t in (abbr, annotate.CEIL_LEGEND[v.id()]) if t)
+    if v.id() in annotate.LIGHT_NOTE:   # 灯具定位图：在吊顶边带正中的筒灯不逐排标离墙尺寸，图例末尾一行说明
+        abbr = " ".join(t for t in (abbr, annotate.LIGHT_NOTE[v.id()]) if t)
+    rows = annotate.LEGEND_ROWS.get(v.id())   # 地面材料编号对照、门槛石、压条、起铺点；顶面布置图的铝扣板吊顶
+    if zid:
+        # 分区/分段图：有设施点位时图例在右侧预留的一栏（墙体行并在里面）；没有点位的不留栏，墙体图例找图面上的空地放，
+        # 视图位置和比例都不变，放不下就不画（JZLOG legend skipped）
+        lw = legend_w[zid] if HAS_LEG else 0.0
+        sheet, svg = drawset.make_sheet(v, ident, v.Name, PROJECT_SHORT, f"1:{den}", today, reserve_right_mm=lw)
+        walls = annotate.wall_materials(f, v, bbox_m=crops[zid])
+        if HAS_LEG:
+            drawset.add_legend(svg, SYMBOLS, keys, den, x=AREA_R - lw + 3, y=24, width=LEG_W, walls=walls, extra=abbr or None,
+                               leader=A.mep and drawset.has_shift_leaders(v), rows=rows)   # 水电图上有挪开画的符号才加引线一行
+        else:
+            drawset.place_legend(svg, SYMBOLS, [], den, near=(AREA_R + 1 - LEG_W, 24), width=LEG_W, walls=walls, extra=abbr or None,
+                                 rows=rows)
+    else:
+        # 总图：图例在视图标题下面——画了点位时的点位行、墙体行，简称对照（小比例总图的 --labels 的 legend_text 接在后面作
+        # 补充说明，这一行宽 180）
+        sheet, svg = drawset.make_sheet(v, ident, v.Name, PROJECT_SHORT, f"1:{den}", today)
+        abbr_text = " ".join(t for t in (abbr, LABELS.get("legend_text") if den >= 200 else "") if t)
+        drawset.add_legend(svg, SYMBOLS, keys, den, x=36, y=drawset.view_title_bottom(sheet) + 9,
+                           width=LEG_W, walls=annotate.wall_materials(f, v), extra=abbr_text or None, extra_width=180, rows=rows)
+    drawset.export_pdf(svg, os.path.join(OUT, f"{ident}.pdf"), f"{ident} {v.Name}")
+    drawset.export_png(svg, os.path.join(OUT, f"{ident}.png"))
+    sheet_list.append((ident, v.Name, f"1:{den}", "A3", ""))
+
+if TABLES is None:
+    TABLES = _build_tables()
 n_sheet = len(views)
-for title, stem, head, rows, widths, align, foot in TABLES:
+for _ti, (title, stem, head, rows, widths, align, foot) in enumerate(TABLES):
     max_table_h = AREA_BOTTOM - TABLE_TOP - drawset.footnote_mm(len(foot))   # 改它会改变分页数和后面各张的图号
     if rows:
         schedules.write_delivery(os.path.join(OUT, f"{title}.xlsx"), title, head, rows, footnote=foot, subtitle=PROJECT)
-    pages = schedules.paginate(head, rows, max_table_h, widths) if rows else []
+    pages = TABLE_PAGES[_ti] if TABLE_PAGES is not None else (schedules.paginate(head, rows, max_table_h, widths) if rows else [])
     drawset.log(f"{stem.replace('_', ' ')} pages" if stem != "door_window_schedule" else "door/window schedule pages", len(pages),
                 "table height budget", round(max_table_h, 1))
     for i, part in enumerate(pages):
@@ -702,6 +742,27 @@ for title, stem, head, rows, widths, align, foot in TABLES:
         drawset.export_pdf(svg, os.path.join(OUT, f"{dw_ident}.pdf"), f"{dw_ident} {name}")
         drawset.export_png(svg, os.path.join(OUT, f"{dw_ident}.png"))
         sheet_list.append((dw_ident, name, "—", "A3", ""))
+
+# 室内立面（--kinds elev）：墙面数据里要出立面的墙每面一张视图，按 2×2 排在 A3 上（多面墙房间单独成张，1～2 面墙小房间合并排），图号接在全部图纸、表格之后。
+# 平面类的图都出完了才建立面视图：立面关着 GlobalReferencing，除平面布置图补内视符号外，其余非立面图纸和视图逐张不变
+if "elev" in A.kinds:
+    import ifcopenshell.util.element as _uel
+    from jiazhuang import elevation
+    _actual_map = {}
+    for name, rows in elevation.sheets(f, rec0, sch, info["offset"], info["z0"]):
+        n_sheet += 1
+        ev_ident = f"{PREFIX}-{n_sheet:02d}"
+        for _r in rows:
+            for _dr in _r:
+                _ep = _uel.get_pset(_dr, elevation.PSET) or {}
+                _actual_map[(_ep.get("Room"), _ep.get("Wall"))] = ev_ident
+        sheet, svg = drawset.make_views_sheet(rows, ev_ident, name, PROJECT_SHORT, f"1:{elevation.DEN}", today, titleblock=elevation.E["titleblock"])
+        drawset.export_pdf(svg, os.path.join(OUT, f"{ev_ident}.pdf"), f"{ev_ident} {name}")
+        drawset.export_png(svg, os.path.join(OUT, f"{ev_ident}.png"))
+        sheet_list.append((ev_ident, name, f"1:{elevation.DEN}", "A3", ""))
+    if ELEV_PLAN_MAP:
+        _expected_map = {(rid, w["wall"]): sid for rid, ws in ELEV_PLAN_MAP.items() for w, sid in ws}
+        assert _actual_map == _expected_map, f"立面图号预排与实际不一致：{_expected_map} vs {_actual_map}"
 
 # 图纸目录（排在最前）；备注一栏留空，给人手写
 idx_ident = f"{PREFIX}-00"

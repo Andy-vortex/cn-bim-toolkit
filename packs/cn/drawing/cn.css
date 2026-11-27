@@ -71,3 +71,11 @@ path.flush { stroke-width: 0.1; }
 .jz-zoneline { stroke-width: 0.35; stroke-dasharray: 6, 1.2, 0.8, 1.2; }
 /* 折断线 0.25；标高符号在 markers-CN.svg */
 .PredefinedType-BREAKLINE { stroke-width: 0.25; }
+/* 平面图上的室内立面内视符号（elevation.draw_callouts）：细实线圆圈 + 实心方向三角 */
+.jz-callout-ring { fill: none; stroke: black; stroke-width: 0.18; }
+.jz-callout-tri { fill: black; stroke: black; stroke-width: 0.12; }
+
+/* 室内立面（elevation.py）：平顶吊顶以上遮罩、踢脚线浅灰填充、墙砖缝细线 */
+.jz-plenum-mask { fill: white; stroke: none; }
+.jz-skirting { fill: #e0e0e0; stroke: black; stroke-width: 0.15; }
+.jz-walljoint { fill: none; stroke: #000; stroke-width: 0.1; }

@@ -269,6 +269,49 @@ def add_view(name: str, target_view: str, hint, den: int, extents, margin_paper_
     return drawing
 
 
+def add_elevation(name: str, frame, rect, crop, depth: float, clip_end: float, den: int, include: str, exclude: str,
+                  pset_name: str, props: dict):
+    """新建一张立面视图（Bonsai 的 ELEVATION_VIEW），相机朝向任意：直接写相机矩阵 = frame × 平移到 (相机范围中心, depth)。
+    frame：视图坐标系（4×4，米：x 沿墙从左到右、y 向上、z 朝室内，原点在墙面左端楼面处）；rect = (u0, v0, u1, v1)：相机范围
+    （视图坐标，米，含给标注留的边）；crop：模型裁切框（视图坐标，米），和平面分段图同一个 JZ_View，render_view 按它裁模型线；
+    depth：相机离墙面多远（米），相机平面就是剖切面；clip_end：往墙里看多深（米，到墙背面）。include / exclude：EPset_Drawing
+    的 Include（只画这些构件，再和相机范围取交集）、Exclude。GlobalReferencing 关掉：开着的话别的正交视图激活时 Bonsai 自动给
+    它们加这张立面的索引，现有各张图都会变。pset_name、props：视图自己的属性集（立面是哪间房哪面墙）。
+    建视图直接调 core.add_drawing，不用界面上的"加视图"操作：那个操作建完以后马上给当前激活的视图（上一张平面图）同步一次索引，
+    这时新视图的 GlobalReferencing 还是缺省的开着，平面图里就多出一个立面索引（图已经出过，但保存的 IFC 里留着它）。
+    属性在激活新视图之前写好，Bonsai 激活时也不会先按缺省设置给它加楼层标高线、轴线。"""
+    from mathutils import Matrix
+    f = tool.Ifc.get()
+    before = {d.id() for d in f.by_type("IfcAnnotation") if d.ObjectType == "DRAWING"}
+    core.add_drawing(tool.Ifc, tool.Collector, tool.Drawing, target_view="ELEVATION_VIEW", location_hint="NORTH")
+    drawing = next(d for d in f.by_type("IfcAnnotation") if d.ObjectType == "DRAWING" and d.id() not in before)
+    core.update_drawing_name(tool.Ifc, tool.Drawing, drawing=drawing, name=name)
+    pset = uel.get_pset(drawing, "EPset_Drawing")
+    api.pset.edit_pset(f, pset=f.by_id(pset["id"]), properties={"HumanScale": f"1:{den}", "Scale": f"1/{den}", "Include": include,
+                                                                "Exclude": exclude, "GlobalReferencing": False})
+    api.pset.edit_pset(f, pset=api.pset.add_pset(f, product=drawing, name=pset_name), properties=props)
+    bpy.ops.bim.activate_drawing(drawing=drawing.id(), should_view_from_camera=False)
+    cam = bpy.context.scene.camera
+    u0, v0, u1, v1 = rect
+    uc, vc = (u0 + u1) / 2, (v0 + v1) / 2
+    cam.matrix_world = Matrix(frame) @ Matrix.Translation((uc, vc, depth))
+    cprops = tool.Drawing.get_camera_props(cam.data)
+    if den in (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000):
+        cprops.diagram_scale = f"1:{den}|1/{den}"
+    else:
+        cprops.diagram_scale = "CUSTOM"
+        cprops.custom_scale_numerator = "1"
+        cprops.custom_scale_denominator = str(den)
+    cprops.width, cprops.height = u1 - u0, v1 - v0
+    cam.data.clip_start = 0.002
+    cam.data.clip_end = clip_end
+    _VIEW_SIZE[drawing.id()] = (cprops.width, cprops.height, cam.location.x, cam.location.y)
+    _set_crop(drawing, crop, uc, vc)
+    log("view", name, "ELEVATION_VIEW", f"1:{den}", "size(m)", round(cprops.width, 2), round(cprops.height, 2), "depth(m)", round(depth, 3),
+        "clip_end(m)", round(clip_end, 3), "include", include.count(" + ") + 1 if include else 0)
+    return drawing
+
+
 def _paper_symbols(drawing, extra=(), z=None) -> int:
     """视图里有 paper_scale 的点位（symbols.json：插座、开关、筒灯、地漏、紧急呼叫、监控）改用 Bonsai 的 SYMBOL 标注画，在任何
     比例下都和 1:paper_scale 时一样大：每个点位一个 SYMBOL（放置和点位相同，EPset_Annotation.Symbol = 符号键，
@@ -546,6 +589,102 @@ def _center_in_layout(sheet, reserve_right_mm, title_w=None):
             if title_w is not None and i.get("data-type") == "view-title":
                 i.set("x", str(nx + (w - title_w) / 2))
     tree.write(layout)
+
+
+VT_BLOCK_MM = 14.0   # 视图下面视图标题占的高：Bonsai 把标题放在视图下沿以下 5mm（sheeter.VIEW_TITLE_OFFSET_Y），模板高 9mm
+
+
+def pack_views(sizes, cols: int, rows: int, gap_mm: float) -> list:
+    """几个视图（[(宽, 高) 图纸毫米]，按顺序）排进几张 A3：每张最多 rows 行、每行最多 cols 个，每行宽（含视图之间和两头的 gap_mm）、
+    各行高（视图 + 视图标题）之和都不超过可放图区（AREA）；放不下就换行，再放不下就另起一张。一个视图本身就放不下时单独一张
+    （记日志）。返回 [[[视图序号, …] 各行] 各张]。"""
+    W, H = AREA[2] - AREA[0], AREA[3] - AREA[1]
+    fits = lambda rs: all(sum(sizes[j][0] for j in r) + gap_mm * (len(r) + 1) <= W for r in rs) and \
+        sum(max(sizes[j][1] for j in r) + VT_BLOCK_MM for r in rs) + gap_mm * (len(rs) + 1) <= H
+    out = []
+    for i in range(len(sizes)):
+        cur = out[-1] if out else None
+        if cur and len(cur[-1]) < cols and fits(cur[:-1] + [cur[-1] + [i]]):
+            cur[-1].append(i)
+        elif cur and len(cur) < rows and fits(cur + [[i]]):
+            cur.append([i])
+        else:
+            out.append([[i]])
+            if not fits([[i]]):
+                log("WARNING view larger than the sheet area", i, [round(v, 1) for v in sizes[i]])
+    return out
+
+
+def make_views_sheet(rows, ident: str, title: str, project_name: str, scale_text: str, date_text: str, titleblock: str = "A3-CN"):
+    """一张图纸放几个视图（立面）：rows = [[视图, …], …] 各行（pack_views 排好的）。各行在可放图区里上下均分、一行里左右均分，
+    同一行的视图顶对齐；视图标题（图名 + 比例，图名下粗线）居中在各自视图下面，粗线按各自图名的宽。图框 titleblock 在约定包里
+    没有时用 A3-CN。返回 (sheet, 图纸 SVG 路径)。"""
+    f = tool.Ifc.get()
+    tdir = uel.get_pset(f.by_type("IfcProject")[0], "BBIM_Documentation", "TitleblocksDir") or ""
+    tb = titleblock if os.path.exists(tool.Ifc.resolve_uri(os.path.join(tdir, titleblock + ".svg"))) else "A3-CN"
+    sheet = _new_sheet(ident, title, project_name, scale_text, date_text, titleblock=tb)
+    names = {}
+    for k, drawing in enumerate((d for r in rows for d in r), 1):
+        ref = api.document.add_reference(f, information=sheet)
+        attrs = tool.Drawing.generate_reference_attributes(ref, Identification=str(k), Name=drawing.Name,
+                                                           Location=tool.Drawing.get_drawing_document(drawing).Location, Description="DRAWING")
+        api.document.edit_reference(f, reference=ref, attributes=attrs)
+        sheeter.SheetBuilder().add_drawing(ref, drawing, sheet)
+        names[ref.id()] = drawing.Name
+    layout = tool.Ifc.resolve_uri(tool.Drawing.get_document_uri(sheet, "LAYOUT"))
+    ET.register_namespace("", SVG_NS)
+    ET.register_namespace("xlink", XLINK[1:-1])
+    tree = ET.parse(layout)
+    gs = tree.getroot().findall(f"{{{SVG_NS}}}g[@data-type='drawing']")
+    fg = {id(g): next(i for i in g.findall(f"{{{SVG_NS}}}image") if i.get("data-type") == "foreground") for g in gs}
+    size = lambda g: (float(fg[id(g)].get("width")), float(fg[id(g)].get("height")))
+    grid, k = [], 0
+    for r in rows:
+        grid.append(gs[k:k + len(r)])
+        k += len(r)
+    x0, y0, x1, y1 = AREA
+    rh = [max(size(g)[1] for g in r) + VT_BLOCK_MM for r in grid]
+    vgap = max(0.0, (y1 - y0 - sum(rh)) / (len(grid) + 1))
+    y = y0 + vgap
+    for r, h in zip(grid, rh):
+        hgap = max(0.0, (x1 - x0 - sum(size(g)[0] for g in r)) / (len(r) + 1))
+        x = x0 + hgap
+        for g in r:
+            w = size(g)[0]
+            dx, dy = x - float(fg[id(g)].get("x")), y - float(fg[id(g)].get("y"))
+            name = names.get(int(g.get("data-id")), "")
+            title_w = schedules.text_mm(name, VT_NAME_MM) + VT_GAP_MM + schedules.text_mm(scale_text, VT_SCALE_MM)
+            for i in g.findall(f"{{{SVG_NS}}}image"):
+                i.set("x", str(float(i.get("x")) + dx))
+                i.set("y", str(float(i.get("y")) + dy))
+                if i.get("data-type") == "view-title":
+                    i.set("x", str(x + (w - title_w) / 2))
+            x += w + hgap
+        y += h + vgap
+    tree.write(layout)
+    out = sheeter.SheetBuilder().build(sheet)
+    _fit_titleblock(out["SHEET"])
+    _view_title_lines(out["SHEET"], {rid: schedules.text_mm(n, VT_NAME_MM) for rid, n in names.items()})
+    log("sheet", ident, title, os.path.basename(out["SHEET"]), tb, [[d.Name for d in r] for r in rows])
+    return sheet, out["SHEET"]
+
+
+def _view_title_lines(sheet_svg: str, lengths: dict) -> None:
+    """一张图纸上几个视图时，每个视图标题图名下的粗线改成各自图名的宽：lengths = {图纸上文档引用的 id: 长（mm）}，按图纸 SVG 里
+    各视图组（data-type="drawing" 的 data-id）分段改。"""
+    with open(sheet_svg, encoding="utf-8") as fh:
+        svg = fh.read()
+    starts = [(m.start(), int(m.group(1))) for m in re.finditer(r'<g\b[^>]*\bdata-type="drawing"[^>]*\bdata-id="(\d+)"[^>]*>', svg)]
+    if not starts:
+        return
+    parts = [svg[:starts[0][0]]]
+    for k, (s, rid) in enumerate(starts):
+        seg = svg[s:starts[k + 1][0] if k + 1 < len(starts) else len(svg)]
+        if rid in lengths:
+            seg = re.sub(r'(<path\b[^>]*data-jz="vt-line"[^>]*\bd="M 0,[\d.]+ H )[\d.]+', lambda m: f"{m.group(1)}{lengths[rid]:.2f}", seg, count=1)
+        parts.append(seg)
+    with open(sheet_svg, "w", encoding="utf-8") as fh:
+        fh.write("".join(parts))
 
 
 # ------------------------------------------------------------------ 表格图纸（Bonsai Schedules）

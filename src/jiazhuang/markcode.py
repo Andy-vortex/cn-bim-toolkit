@@ -1,4 +1,4 @@
-"""门窗编号文字的解析（只用标准库；识别 dxfplan、建模 plan2ifc、编号 openings 三处共用）。
+"""门窗编号文字的解析（只用标准库；识别 dxfplan、建模 plan2ifc、编号 openings、墙面 wall 共用）。
 
 国内门窗编号惯例：代号（M、C、FM、TC…，至少一个大写字母）+ 可选防火等级（甲/乙/丙）+ 宽、高各两位分米，
 如 M0921、C1815、FM乙1021、TC1818。没有代号的串（"1121""乙1121"，多是拆开的编号碎片）不算编号。
@@ -35,3 +35,31 @@ def fire_rating(label: str) -> str | None:
     if p is None or p["prefix"] not in FIRE_PREFIXES:
         return None
     return p["grade"] + "级" if p["grade"] else "待定"
+
+
+def adopt(o: dict, width: float, width0: float | None = None) -> tuple[str, str]:
+    """识别结果里的原图编号 → (采用的编号, 备注)。width0 是拆改前的识别宽度：拆改改了洞口宽度的，原图编号说的是
+    改前的洞口，一律不沿用（哪怕只差 1dm、编号还"对得上"）；宽度位与洞口宽相差 1dm 以上的不采用，备注写明待核。
+    建模（plan2ifc）和墙面（wall）都按它取门窗高度。"""
+    lab, raw = o.get("label") or "", o.get("label_raw") or o.get("label") or ""
+    if not raw:
+        return "", ""
+    if width0 is not None and abs(width0 - width) > 1.0:
+        return "", f"原图编号 {raw} 为拆改前的洞口，未沿用"
+    if lab and fits(lab, width):
+        return lab, ""
+    if parse(raw) is None:
+        return "", f"原图编号文字 {raw} 不是完整编号，未采用（待核）"
+    return "", f"原图编号 {raw} 与识别尺寸不符，未采用（待核）"
+
+
+def label_height(label: str, width: float) -> float | None:
+    """采用的原图编号（代号 + 宽高各两位分米，如 FM乙1121、C1815、TC1818）→ 编号里的高度（毫米）；宽度对不上返回 None。"""
+    p = parse(label)
+    return float(p["h"]) if p and fits(label, width) else None
+
+
+def rec_height(o: dict) -> float | None:
+    """识别结果里写的窗高（毫米，门窗的 height 键）：没有、不是正数返回 None。窗高优先用它，再用原图编号里的，再用缺省。"""
+    h = o.get("height")
+    return float(h) if isinstance(h, (int, float)) and not isinstance(h, bool) and h > 0 else None

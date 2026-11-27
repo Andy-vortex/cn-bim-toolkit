@@ -17,13 +17,12 @@ import os
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
-from . import conventions, furnish, markcode
+from . import conventions, furnish, openings
 
 PACK = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "packs", "cn", "ceiling"))
 with open(os.path.join(PACK, "rules.json"), encoding="utf-8") as _fh:
     _R = json.load(_fh)
 SOURCES, MATERIALS, TEMPLATES, ROOMS, CHECKS = (_R[k] for k in ("sources", "materials", "templates", "rooms", "checks"))
-_OPC = conventions.get("openings")
 with open(conventions.pack_file("symbols.json"), encoding="utf-8") as _fh:
     _SYM = json.load(_fh)["types"]
 LIGHTS = {k: s["body"][2] for k, s in _SYM.items() if s.get("ifc_type") == "IfcLightFixtureType"}   # 灯的键 → 灯体高
@@ -49,22 +48,13 @@ def room_height(sch: dict, rid: str) -> float:
     return float(r.get("height") or CHECKS["height"])
 
 
-def _heads(rm, ops) -> float:
-    """房间里门、窗的上沿最高多少（毫米，离楼面）：门窗高按原图编号（对得上洞口宽时），否则用约定包缺省；窗台高用识别结果的，
-    没有用缺省；窗高不知道的高窗按窗台高算（不按缺省窗高往上加，免得上沿算到 3m）。"""
+def _heads(rm, ops, width0=None) -> float:
+    """房间里门、窗的上沿最高多少（毫米，离楼面）：洞口的竖向范围用 openings.rec_extent，和建模、墙面同一套（原图编号对得上
+    洞口宽时用编号里的高度；窗高不知道的窗到统一的窗顶，高窗不会按缺省窗高往上加到 3m）。width0：拆改前的识别宽度。"""
     top = 0.0
     for o in ops:
-        if rm["id"] not in (o.get("rooms") or []):
-            continue
-        lab = o.get("label") or ""
-        h = markcode.parse(lab)["h"] if lab and markcode.fits(lab, float(o["width"])) else None
-        if o["kind"] == "door":
-            top = max(top, h or _OPC["default_height_mm"]["door"])
-        else:   # 窗高不知道时上沿按缺省窗（缺省窗台 + 缺省窗高）算，窗台比这还高的（高窗）按窗台算
-            k = "bay" if o.get("polygon") else "window"
-            d = _OPC["default_sill_mm"][k] + _OPC["default_height_mm"][k]
-            sill = o["sill"] if o.get("sill") is not None else _OPC["default_sill_mm"][k]
-            top = max(top, sill + h if h else max(d, sill))
+        if rm["id"] in (o.get("rooms") or []):
+            top = max(top, openings.rec_extent(o, (width0 or {}).get(o["id"]))[1])
     return float(top)
 
 
@@ -131,7 +121,7 @@ def _lowest(t, p, H):
     return H - p["drop"]
 
 
-def plan_room(rm, spec, H, ops, from_intent, named=None):
+def plan_room(rm, spec, H, ops, from_intent, named=None, width0=None):
     """一间房：模板 + 参数 → (块, 说明, 违规)。说明是退成别的模板的原因。规则表给的缺省做不了时退一级（只记说明）；
     named（意图点名的模板）做不了时照样退，但记一条违规 template（写明原因）。意图来的房间吊顶底低于净高门槛、门窗上沿不退，
     记违规；任何吊顶块的底不低于原顶（下吊 0、底标高写到原顶以上）记违规 above_slab。"""
@@ -139,7 +129,7 @@ def plan_room(rm, spec, H, ops, from_intent, named=None):
     notes, viol = [], []
     R = Polygon([w["a"] for w in rm["walls"]]).buffer(0)
     need = CHECKS["min_net"].get(rm["type"], CHECKS["min_net"]["default"])
-    head = _heads(rm, ops)
+    head = _heads(rm, ops, width0)
     chain, named_v = [t], None
     while True:
         tpl = TEMPLATES[t]
@@ -286,6 +276,7 @@ def ceiling(rec: dict, sch: dict, intent: dict | None = None, units=None) -> tup
     unit = {r["id"]: r.get("unit") or "" for r in geo["rooms"]}
     public = {r["id"] for r in geo["rooms"] if r.get("public")}
     ops = geo["openings"]
+    width0 = {o["id"]: float(o["width"]) for o in rec["openings"]}   # 拆改前的识别宽度：拆改改了宽度的，原图编号（和它的高度）不沿用
     rooms = furnish.rooms_of(rec, sch)
     errors, viol, report_rooms = [], [], []
     given = {}
@@ -310,7 +301,7 @@ def ceiling(rec: dict, sch: dict, intent: dict | None = None, units=None) -> tup
         spec["_curtain_walls"] = _curtain_walls(rm, ops, spec.get("curtain"), errors, from_intent and "curtain" in given[rm["id"]][0])
         H = room_height(sch, rm["id"])
         named = spec["ceiling"] if from_intent and "ceiling" in given[rm["id"]][0] and "ceiling" in spec else None
-        t, bl, notes, vv = plan_room(rm, spec, H, ops, from_intent, named)
+        t, bl, notes, vv = plan_room(rm, spec, H, ops, from_intent, named, width0)
         for v in vv:
             viol.append(dict({"room": rm["name"], "room_id": rm["id"]}, **v))
         report_rooms.append({"room": rm["name"], "room_id": rm["id"], "template": t, "source": "意图" if from_intent else "规则",

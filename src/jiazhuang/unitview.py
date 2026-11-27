@@ -3,7 +3,7 @@
 subset(rec, sch, 户号) 把识别结果、方案裁成只剩这一户：这一户的房间，围着它的墙（分户墙、外墙画全厚，别户和公共部分的墙、
 房间、门窗、家具、点位都去掉），洞口开向这一户房间的门窗（入户门也在），穿过这一户的轴线。出图流程照常把它当成整层：
 尺寸、轴号、外墙判断、门窗编号、表格都只算这一户，不用裁切框、折断线和接图注。DENS 是按户出图的比例档。
-以后顶面、地面、立面按户出图也从这里取。"""
+顶面（吊顶块）、地面（铺装区、门槛石、压条）、墙面（每面墙一条）按户出图也从这里取。"""
 from __future__ import annotations
 
 from shapely.geometry import MultiPolygon, Polygon
@@ -109,6 +109,8 @@ def subset(rec: dict, sch: dict, unit: str) -> tuple[dict, dict]:
         out["flooring"] = dict(fl, zones=[z for z in fl.get("zones", []) if set(z["rooms"]) <= ids],
                                thresholds=[t for t in fl.get("thresholds", []) if t["door"] in doors and set(t["rooms"]) & ids],
                                strips=[s for s in fl.get("strips", []) if s["door"] in doors and set(s["rooms"]) & ids])
+    if "walls" in sch:   # 墙面只留这一户房间的
+        out["walls"] = [w for w in sch["walls"] if w.get("room") in ids]
     kept |= ids
     if sch.get("after"):
         out["after"] = new_geo
