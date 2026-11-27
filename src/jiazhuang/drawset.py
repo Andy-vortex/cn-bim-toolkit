@@ -63,13 +63,23 @@ WORK_PATHS = {
 }
 
 
-def _dir_uri(path: str, start: str) -> str:
+def _dir_uri(path: str, start: str, fallback_rel: str | None = None) -> str:
     """目录写进 IFC 的路径（正斜杠，末尾 /）：相对 start（IFC 所在目录），输出目录连同约定包一起挪走还能用；不在同一个盘
-    （Windows 上另一个盘符、网络共享）没有相对路径，写绝对路径（Bonsai 的 resolve_uri 两种都认）。"""
+    （Windows 上另一个盘符、网络共享）没有相对路径：给了 fallback_rel 时把目录里的文件拷进 start/fallback_rel 后写相对路径
+    （Bonsai 的 sheeter.create 会对图框和图纸目录调 os.path.relpath，跨盘绝对路径会抛 ValueError），否则写绝对路径。"""
     try:
         p = os.path.relpath(path, start)
     except ValueError:
-        p = os.path.abspath(path)
+        if fallback_rel:
+            dst = os.path.join(start, *fallback_rel.split("/"))
+            os.makedirs(dst, exist_ok=True)
+            for fn in os.listdir(path):
+                fp = os.path.join(path, fn)
+                if os.path.isfile(fp):
+                    shutil.copy(fp, os.path.join(dst, fn))
+            p = fallback_rel
+        else:
+            p = os.path.abspath(path)
     return p.replace("\\", "/").rstrip("/") + "/"
 
 
@@ -102,7 +112,7 @@ def configure_project() -> None:
     with open(marks, "w", encoding="utf-8") as fh:
         fh.write(svg)
     _write_symbols(at(WORK_PATHS["SymbolsPath"]))
-    props = {**WORK_PATHS, "TitleblocksDir": _dir_uri(conventions.pack_file("titleblocks"), ifc_dir)}
+    props = {**WORK_PATHS, "TitleblocksDir": _dir_uri(conventions.pack_file("titleblocks"), ifc_dir, f"{WORK}/titleblocks")}
     pset = uel.get_pset(project, "BBIM_Documentation")
     pset = f.by_id(pset["id"]) if pset else api.pset.add_pset(f, product=project, name="BBIM_Documentation")
     api.pset.edit_pset(f, pset=pset, properties=props)

@@ -20,7 +20,7 @@
 | 大样 | — | 未开始 |
 | 规范自查 | `checker.py`，规则包 `packs/cn/rules/` | 可用 |
 | 渲染与漫游 | Blender Cycles、Pannellum | 未接入 |
-| agent 接口 | 技能 + MCP | 未开始 |
+| agent 接口 | `mcp_server.py`，技能 `skills/cn-bim-toolkit/` | 实验 |
 
 ## 环境
 
@@ -134,6 +134,41 @@ build/floor/out/
 ```
 
 `type` 见 `checker.CHECKS`。结论六种：不通过 / 待确认 / 信息不足 / 人工复核 / 通过 / 不涉及。只写条文号和自己的概括，不抄标准原文。仓库只附 `packs/cn/rules/example-home.json`，阈值是示例，不对应任何标准。
+
+## agent 接口（MCP 与技能）
+
+仓库提供纯标准库的 MCP stdio 服务（无需额外依赖）与跨 agent 技能说明（[skills/cn-bim-toolkit/SKILL.md](skills/cn-bim-toolkit/SKILL.md)）：
+
+- 启动服务：`python scripts/mcp_server.py`（按行 JSON-RPC 2.0；`--check` 查本地环境，`--list-tools` 列出全部 13 个工具）。
+- 工具一一对应各命令行脚本（`dxfplan`、`demo_apartment`、`furnish_context`、`furnish_place`、`ceiling`、`mep`、`flooring`、`wall`、`make_plan_set`、`check_ifc`、`make_demo_set`）外加 `check_env`、`list_packs`；`packs/cn/` 下的规则表、示例意图和 README 同时作为 MCP 资源（`cn-bim://pack/...`）开放只读访问。
+- 在 MCP 客户端配置（如 `.mcp.json`）中接入：
+
+```json
+{
+  "mcpServers": {
+    "cn-bim-toolkit": {
+      "command": "python",
+      "args": ["scripts/mcp_server.py"],
+      "env": {
+        "JZ_BLENDER": "/path/to/blender",
+        "BLENDER_USER_RESOURCES": "/path/to/blender-profile"
+      }
+    }
+  }
+}
+```
+
+`JZ_BLENDER` 未设时自动在 `PATH` 和常见安装目录查找；`BLENDER_USER_RESOURCES` 未设且仓库根目录存在 `blender-profile/` 时自动使用。通过 MCP 传入的相对路径一律按仓库根目录解析，仓库外的输入输出请传绝对路径。
+
+## 测试
+
+公开自动测试基于标准库 `unittest`（兼容 `pytest`），不需额外安装测试包：
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -v
+```
+
+无 Blender 环境时自动运行纯 Python 全链路与 MCP stdio 协议测试，并跳过 Blender 端到端用例；设置 `JZ_BLENDER`（或 `JZ_TEST_BLENDER=1`）时连同 Blender 出图与规范自查一并验证。
 
 ## 数据和隐私
 
