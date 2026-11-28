@@ -1,0 +1,191 @@
+{
+ "_说明": "Cycles 渲染与全景漫游约定包（纯数据）。defaults 放相机、采样、灯光和 Pannellum 缺省参数；materials 放各 IFC / JZ_* 表面材质的零下载程序化 PBR 参数，以及可选的本地 CC0 贴图目录名（polyhaven 键，给 --assets 或 JZ_RENDER_ASSETS 时自动升级为 2K 贴图，找不到目录时平滑回退程序化材质）。",
+ "defaults": {
+  "eye_height_m": 1.45,
+  "corner_inset_m": 0.45,
+  "corner_lens_mm": 20.0,
+  "corner_size": [1600, 1000],
+  "corner_samples": 128,
+  "pano_size": [3072, 1536],
+  "pano_samples": 128,
+  "jpg_quality": 85,
+  "hfov": 100,
+  "sun_elevation_deg": 28.0,
+  "sun_rotation_deg": 215.0,
+  "sun_energy": 2.4,
+  "exposure": 0.05,
+  "main_light_w": 42.0,
+  "downlight_w": 9.0,
+  "wall_light_w": 12.0,
+  "fallback_light_w": 35.0,
+  "slab_thickness_m": 0.15,
+  "pannellum_cdn": "https://cdn.jsdelivr.net/npm/pannellum@2.5.7/build"
+ },
+ "materials": {
+  "wall_paint": {
+   "name": "乳胶漆墙",
+   "rgb": [0.87, 0.85, 0.81],
+   "roughness": 0.82,
+   "polyhaven": {"folder": "plastered_wall", "tile_m": 2.4, "tint": [0.95, 0.94, 0.91], "rough_mul": 1.0, "normal": 0.25}
+  },
+  "wall_wallpaper": {
+   "name": "墙面壁纸",
+   "rgb": [0.80, 0.77, 0.71],
+   "roughness": 0.78,
+   "pattern": "noise",
+   "pattern_scale": 60.0,
+   "polyhaven": {"folder": "beige_wall_001", "tile_m": 1.8, "tint": [0.95, 0.93, 0.89], "rough_mul": 1.0, "normal": 0.35}
+  },
+  "wall_tile": {
+   "name": "墙砖",
+   "rgb": [0.84, 0.83, 0.80],
+   "rgb2": [0.81, 0.80, 0.77],
+   "mortar_rgb": [0.58, 0.57, 0.55],
+   "roughness": 0.18,
+   "coat": 0.35,
+   "pattern": "tile",
+   "tile_m": [0.6, 0.3],
+   "mortar_m": 0.004
+  },
+  "skirting": {
+   "name": "踢脚线",
+   "rgb": [0.82, 0.79, 0.74],
+   "roughness": 0.42
+  },
+  "floor_wood": {
+   "name": "木地板",
+   "rgb": [0.56, 0.41, 0.27],
+   "rgb2": [0.49, 0.35, 0.22],
+   "mortar_rgb": [0.28, 0.20, 0.13],
+   "roughness": 0.38,
+   "coat": 0.15,
+   "pattern": "wood",
+   "tile_m": [1.22, 0.195],
+   "mortar_m": 0.002,
+   "polyhaven": {"folder": "laminate_floor_02", "tile_m": 2.0, "rough_mul": 0.9, "normal": 0.5}
+  },
+  "floor_tile_large": {
+   "name": "大砖地面",
+   "rgb": [0.82, 0.81, 0.78],
+   "mortar_rgb": [0.66, 0.65, 0.62],
+   "roughness": 0.22,
+   "coat": 0.3,
+   "pattern": "tile",
+   "tile_m": [0.8, 0.8],
+   "mortar_m": 0.003,
+   "polyhaven": {"folder": "interior_tiles", "tile_m": 1.6, "tint": [0.96, 0.95, 0.93], "rough_mul": 0.8, "normal": 0.25}
+  },
+  "floor_tile_mid": {
+   "name": "防滑砖地面",
+   "rgb": [0.76, 0.75, 0.72],
+   "mortar_rgb": [0.58, 0.57, 0.55],
+   "roughness": 0.42,
+   "pattern": "tile",
+   "tile_m": [0.6, 0.6],
+   "mortar_m": 0.003,
+   "polyhaven": {"folder": "interior_tiles", "tile_m": 1.2, "tint": [0.90, 0.89, 0.87], "rough_mul": 1.0, "normal": 0.35}
+  },
+  "floor_tile_small": {
+   "name": "湿区小砖地面",
+   "rgb": [0.74, 0.74, 0.73],
+   "mortar_rgb": [0.56, 0.56, 0.55],
+   "roughness": 0.45,
+   "pattern": "tile",
+   "tile_m": [0.3, 0.3],
+   "mortar_m": 0.003,
+   "polyhaven": {"folder": "interior_tiles", "tile_m": 0.9, "tint": [0.88, 0.88, 0.87], "rough_mul": 1.05, "normal": 0.4}
+  },
+  "floor_stone": {
+   "name": "门槛石",
+   "rgb": [0.46, 0.44, 0.42],
+   "roughness": 0.22,
+   "coat": 0.35
+  },
+  "ceil_gypsum": {
+   "name": "石膏板吊顶",
+   "rgb": [0.91, 0.91, 0.90],
+   "roughness": 0.88
+  },
+  "ceil_alu": {
+   "name": "铝扣板吊顶",
+   "rgb": [0.88, 0.89, 0.90],
+   "mortar_rgb": [0.68, 0.69, 0.70],
+   "roughness": 0.35,
+   "metallic": 0.25,
+   "pattern": "tile",
+   "tile_m": [0.3, 0.3],
+   "mortar_m": 0.003
+  },
+  "door_wood": {
+   "name": "木门",
+   "rgb": [0.56, 0.45, 0.35],
+   "roughness": 0.42
+  },
+  "window_glass": {
+   "name": "外窗玻璃",
+   "rgb": [0.92, 0.97, 0.98],
+   "roughness": 0.04,
+   "pattern": "arch_glass"
+  },
+  "shower_glass": {
+   "name": "淋浴隔断玻璃",
+   "rgb": [0.88, 0.95, 0.96],
+   "roughness": 0.05,
+   "pattern": "arch_glass"
+  },
+  "furn_fabric": {
+   "name": "布艺家具",
+   "rgb": [0.40, 0.38, 0.35],
+   "roughness": 0.86,
+   "pattern": "noise",
+   "pattern_scale": 120.0
+  },
+  "furn_wood": {
+   "name": "木质家具",
+   "rgb": [0.46, 0.33, 0.21],
+   "roughness": 0.42,
+   "coat": 0.1
+  },
+  "furn_cabinet": {
+   "name": "浅色柜体",
+   "rgb": [0.70, 0.67, 0.62],
+   "roughness": 0.38
+  },
+  "furn_counter": {
+   "name": "台面石材",
+   "rgb": [0.74, 0.73, 0.70],
+   "roughness": 0.24,
+   "coat": 0.25
+  },
+  "ceramic": {
+   "name": "白陶瓷洁具",
+   "rgb": [0.92, 0.92, 0.92],
+   "roughness": 0.08,
+   "coat": 0.6
+  },
+  "plastic": {
+   "name": "开关插座面板",
+   "rgb": [0.88, 0.88, 0.86],
+   "roughness": 0.32
+  },
+  "lamp_emit": {
+   "name": "灯具发光面",
+   "rgb": [1.0, 0.96, 0.88],
+   "roughness": 0.4,
+   "emit_rgb": [1.0, 0.93, 0.82],
+   "emit_strength": 6.0
+  },
+  "cove_emit": {
+   "name": "灯带发光面",
+   "rgb": [1.0, 0.92, 0.76],
+   "roughness": 0.4,
+   "emit_rgb": [1.0, 0.88, 0.70],
+   "emit_strength": 14.0
+  },
+  "slab_subfloor": {
+   "name": "垫层底板",
+   "rgb": [0.35, 0.35, 0.35],
+   "roughness": 0.9
+  }
+ }
+}

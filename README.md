@@ -19,7 +19,7 @@
 | 室内立面：每面要出立面的墙一张视图，内视符号、尺寸、标高、点位高度、材料标注、墙砖缝、踢脚线 | `elevation.py`，同上 | 实验 |
 | 大样 | — | 未开始 |
 | 规范自查 | `checker.py`，规则包 `packs/cn/rules/` | 可用 |
-| 渲染与漫游 | Blender Cycles、Pannellum | 未接入 |
+| 渲染与漫游 | `render.py`、`tour.py`，约定包 `packs/cn/render/`（Blender Cycles、Pannellum） | 实验 |
 | agent 接口 | `mcp_server.py`，技能 `skills/cn-bim-toolkit/` | 实验 |
 
 ## 环境
@@ -135,12 +135,23 @@ build/floor/out/
 
 `type` 见 `checker.CHECKS`。结论六种：不通过 / 待确认 / 信息不足 / 人工复核 / 通过 / 不涉及。只写条文号和自己的概括，不抄标准原文。仓库只附 `packs/cn/rules/example-home.json`，阈值是示例，不对应任何标准。
 
+## 渲染与全景漫游
+
+直接读取同一份 `model.ifc`（只读，不修改源模型），按 `packs/cn/render/materials.json` 为墙地顶面层、门窗、家具和灯具赋 PBR 材质，自动布置各房间墙角透视机位与避让家具的 360° 全景站，按门洞与开敞边计算热点角度并生成 Pannellum 静态漫游页：
+
+```bash
+blender -b --python-exit-code 1 --python scripts/render.py -- build/flooring/sheets/model.ifc build/render/demo
+```
+
+- 默认零下载即可运行（程序化 PBR 材质 + Blender 内置 Nishita 物理天空 + 官方 Pannellum CDN）；传入 `--assets <目录>`（或环境变量 `JZ_RENDER_ASSETS`）自动升级本地 CC0 贴图与 HDRI，传入 `--pannellum <目录>`（或 `JZ_PANNELLUM`）自动离线打包 Pannellum。详见 [packs/cn/render](packs/cn/render/README.md)。
+- 输出 `corners/*.png`、`panos/*.png`、`tour/index.html`、`tour/tour.json`、`tour/img/*.jpg` 与 `render-manifest.json`。
+
 ## agent 接口（MCP 与技能）
 
 仓库提供纯标准库的 MCP stdio 服务（无需额外依赖）与跨 agent 技能说明（[skills/cn-bim-toolkit/SKILL.md](skills/cn-bim-toolkit/SKILL.md)）：
 
-- 启动服务：`python scripts/mcp_server.py`（按行 JSON-RPC 2.0；`--check` 查本地环境，`--list-tools` 列出全部 13 个工具）。
-- 工具一一对应各命令行脚本（`dxfplan`、`demo_apartment`、`furnish_context`、`furnish_place`、`ceiling`、`mep`、`flooring`、`wall`、`make_plan_set`、`check_ifc`、`make_demo_set`）外加 `check_env`、`list_packs`；`packs/cn/` 下的规则表、示例意图和 README 同时作为 MCP 资源（`cn-bim://pack/...`）开放只读访问。
+- 启动服务：`python scripts/mcp_server.py`（按行 JSON-RPC 2.0；`--check` 查本地环境，`--list-tools` 列出全部 14 个工具）。
+- 工具一一对应各命令行脚本（`dxfplan`、`demo_apartment`、`furnish_context`、`furnish_place`、`ceiling`、`mep`、`flooring`、`wall`、`make_plan_set`、`check_ifc`、`make_demo_set`、`render`）外加 `check_env`、`list_packs`；`packs/cn/` 下的规则表、示例意图和 README 同时作为 MCP 资源（`cn-bim://pack/...`）开放只读访问。
 - 在 MCP 客户端配置（如 `.mcp.json`）中接入：
 
 ```json

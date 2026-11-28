@@ -94,7 +94,7 @@ class TestMcpStdioServer(unittest.TestCase):
         p2 = subprocess.run([sys.executable, "scripts/mcp_server.py", "--list-tools"], cwd=str(ROOT), env=env, capture_output=True)
         self.assertEqual(p2.returncode, 0)
         tools = json.loads(p2.stdout.decode("utf-8"))
-        self.assertEqual(len(tools), 13)
+        self.assertEqual(len(tools), 14)
 
     def test_stage_error_handling_and_first_error_line(self):
         sys.path.insert(0, str(SRC))
@@ -132,7 +132,7 @@ class TestMcpStdioServer(unittest.TestCase):
             self.assertEqual(names, {
                 "check_env", "list_packs", "demo_apartment", "dxfplan",
                 "furnish_context", "furnish_place", "ceiling", "mep",
-                "flooring", "wall", "make_plan_set", "check_ifc", "make_demo_set",
+                "flooring", "wall", "make_plan_set", "check_ifc", "make_demo_set", "render",
             })
 
             # 资源列表与读取 + 路径穿越拦截
@@ -264,6 +264,7 @@ class TestMcpStdioServer(unittest.TestCase):
                     ("make_plan_set", {"recognition": str(rec), "out": str(t / "sheets")}),
                     ("make_demo_set", {"out": str(t / "demo_out")}),
                     ("check_ifc", {"ifc": str(t / "a.ifc"), "rules": "packs/cn/rules/example-home.json", "out": str(t / "chk")}),
+                    ("render", {"ifc": str(t / "a.ifc"), "out": str(t / "rend")}),
                 ):
                     r_bl, is_err = cli.call_tool(btool, bargs)
                     self.assertTrue(is_err, btool)

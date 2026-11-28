@@ -1,6 +1,6 @@
 ---
 name: cn-bim-toolkit
-description: 驱动 cn-bim-toolkit 开源中国家装 BIM 工具链：从打散 DXF 识别户型，按“房间摘要 → 家具 → 吊顶 → 水电 → 地面 → 墙面 → IFC4 与全套 A3 施工图 → 规范自查”全流程出图与迭代纠偏。适用于任何室内方案排布、水电/顶面/地面/立面施工图生成或 IFC 规范自查任务。
+description: 驱动 cn-bim-toolkit 开源中国家装 BIM 工具链：从打散 DXF 识别户型，按“房间摘要 → 家具 → 吊顶 → 水电 → 地面 → 墙面 → IFC4 与全套 A3 施工图 → 规范自查 → Cycles 渲染与 Pannellum 全景漫游”全流程出图与迭代纠偏。适用于任何室内方案排布、施工图生成、IFC 规范自查或全景漫游任务。
 ---
 
 # cn-bim-toolkit Agent 技能
@@ -24,7 +24,7 @@ DXF ──► dxfplan（或 demo_apartment）──► 识别.json
   furnish_context（读墙边 W1..Wn 与门窗）◄────┤
         │
         ▼
-  furnish_place ──► ceiling ──► mep ──► flooring ──► wall ──► make_plan_set ──► check_ifc
+  furnish_place ──► ceiling ──► mep ──► flooring ──► wall ──► make_plan_set ──► check_ifc / render
 ```
 
 | 阶段 | MCP 工具 | CLI 命令 | 产出 |
@@ -39,6 +39,7 @@ DXF ──► dxfplan（或 demo_apartment）──► 识别.json
 | 墙面立面数据 | `wall` | `python scripts/wall.py <识别.json> <方案.json> <输出目录> [--intent …] [--unit …]` | `scheme.json`、`report.json` |
 | 建模与出图 | `make_plan_set` | `blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- <识别.json> <输出目录> [选项]` | `model.ifc`、`*.pdf`、`*.png`、`*.xlsx` |
 | 规范自查 | `check_ifc` | `blender -b --python-exit-code 1 --python scripts/check_ifc.py -- <model.ifc> <规则.json> <输出目录> [工程名]` | `*-report.json/html/pdf` |
+| 渲染与全景漫游 | `render` | `blender -b --python-exit-code 1 --python scripts/render.py -- <model.ifc> <输出目录> [--mode all\|corner\|pano]` | `corners/*.png`、`tour/index.html` |
 | 示例户型一键出图 | `make_demo_set` | `blender -b --python-exit-code 1 --python scripts/make_demo_set.py [-- 输出目录]` | `JZ-00..04`、`model.ifc` |
 
 ### 依赖与过时规则

@@ -97,6 +97,26 @@ class TestBlenderMcpEndToEnd(unittest.TestCase):
                 for ext in ("json", "html", "pdf"):
                     self.assertTrue(Path(rk["files"][ext]).is_file())
 
+                # 经 MCP 调 Cycles 渲染（低采样快速端到端冒烟：角落图 + 360° 全景 + Pannellum 网页）
+                rend_dir = t / "render"
+                rr, err = cli.call_tool("render", {
+                    "ifc": rs["files"]["model"],
+                    "out": str(rend_dir),
+                    "mode": "all",
+                    "rooms": "客厅,玄关",
+                    "samples": 8,
+                    "pano_samples": 8,
+                    "size": "320x200",
+                    "pano_size": "512x256",
+                    "project": "示例户型",
+                })
+                self.assertFalse(err, rr)
+                self.assertEqual(rr["counts"]["corners"], 2)
+                self.assertEqual(rr["counts"]["panos"], 2)
+                self.assertEqual(rr["counts"]["hotspots"], 2)
+                self.assertTrue(Path(rr["files"]["tour_html"]).is_file())
+                self.assertTrue(Path(rr["files"]["tour_json"]).is_file())
+
                 # 缺失文件退出 2，不建输出目录
                 bad_dir = t / "bad_plan_out"
                 rb, err = cli.call_tool("make_plan_set", {"recognition": str(t / "nope.json"), "out": str(bad_dir)})

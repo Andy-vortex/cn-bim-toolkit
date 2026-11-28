@@ -162,6 +162,8 @@ def _check_args(args: Any, schema: dict[str, Any]) -> dict[str, Any]:
             raise ToolParamError(f"{k} must be a string")
         elif t == "boolean" and not isinstance(v, bool):
             raise ToolParamError(f"{k} must be a boolean")
+        elif t == "integer" and (not isinstance(v, int) or isinstance(v, bool)):
+            raise ToolParamError(f"{k} must be an integer")
         elif t == "array":
             if not isinstance(v, list):
                 raise ToolParamError(f"{k} must be an array")
@@ -276,6 +278,7 @@ def _tool_list_packs(_args: dict[str, Any]) -> dict[str, Any]:
     mep_pts = _read_json_if_exists(PACKS_DIR / "mep" / "points.json") or {}
     floor = _read_json_if_exists(PACKS_DIR / "flooring" / "rules.json") or {}
     wall = _read_json_if_exists(PACKS_DIR / "wall" / "rules.json") or {}
+    rend = _read_json_if_exists(PACKS_DIR / "render" / "materials.json") or {}
     types = _strip_meta(furn.get("types", {}))
     cn_furn = {k: list(v.get("params", {}).keys()) for k, v in types.items() if k.startswith("cn_")}
     lib_furn = sorted(k for k in types if k.startswith("lib:"))
@@ -293,6 +296,7 @@ def _tool_list_packs(_args: dict[str, Any]) -> dict[str, Any]:
         "mep": {"points": list(_strip_meta(mep_pts.get("points", {})).keys())},
         "flooring": {"materials": list(_strip_meta(floor.get("materials", {})).keys())},
         "wall": {"materials": list(_strip_meta(wall.get("materials", {})).keys())},
+        "render": {"materials": list(_strip_meta(rend.get("materials", {})).keys())},
         "rules": rules_files,
         "example_intents": intents,
         "resources": [r["uri"] for r in list_resources()],
@@ -604,6 +608,62 @@ def _tool_make_demo_set(args: dict[str, Any]) -> dict[str, Any]:
     return res
 
 
+def _tool_render(args: dict[str, Any]) -> dict[str, Any]:
+    blender = find_blender()
+    if not blender:
+        return _missing_blender(args["out"])
+    cmd = [blender, "-b", "--python-exit-code", "1", "--python", str(ROOT / "scripts" / "render.py"), "--",
+           args["ifc"], args["out"]]
+    for key, flag in (
+        ("mode", "--mode"),
+        ("rooms", "--rooms"),
+        ("size", "--size"),
+        ("pano_size", "--pano-size"),
+        ("device", "--device"),
+        ("assets", "--assets"),
+        ("pannellum", "--pannellum"),
+        ("project", "--project"),
+    ):
+        if args.get(key):
+            cmd.extend([flag, str(args[key])])
+    for key, flag in (("samples", "--samples"), ("pano_samples", "--pano-samples")):
+        if args.get(key) is not None:
+            cmd.extend([flag, str(args[key])])
+    if args.get("save_blend"):
+        cmd.append("--save-blend")
+    rc, stdout, stderr, jzlog = _run_cmd(cmd, for_blender=True)
+    out_p = _resolve_path(args["out"])
+    if rc != 0:
+        return {"ok": False, "returncode": rc, "jzlog": jzlog, "output": str(out_p), "files": {}, "error": _first_error_line(stderr, stdout)}
+    man_p = out_p / "render-manifest.json"
+    man = _read_json_if_exists(man_p) if man_p.is_file() else None
+    files: dict[str, Any] = {}
+    counts: dict[str, Any] = {"corners": 0, "panos": 0, "hotspots": 0}
+    if isinstance(man, dict):
+        files["manifest"] = str(man_p)
+        if man.get("corners"):
+            files["corners"] = man["corners"]
+            counts["corners"] = len(man["corners"])
+        if man.get("panos"):
+            files["panos"] = man["panos"]
+            counts["panos"] = len(man["panos"])
+        if man.get("tour"):
+            files["tour_html"] = man["tour"].get("index_html")
+            files["tour_json"] = man["tour"].get("tour_json")
+            counts["hotspots"] = man["tour"].get("hotspots", 0)
+        if man.get("blend"):
+            files["blend"] = man["blend"]
+    return {
+        "ok": True,
+        "returncode": 0,
+        "jzlog": jzlog,
+        "output": str(out_p),
+        "files": files,
+        "counts": counts,
+        **({"device": man.get("device"), "sky": man.get("sky")} if isinstance(man, dict) else {}),
+    }
+
+
 # ------------------------------------------------------------------ 工具目录（参数与脚本 argparse 同名同义）
 
 def _schema(props: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -747,6 +807,25 @@ TOOLS: list[dict[str, Any]] = [
         "description": "在 Blender/Bonsai 里给示例户型出一套 A3 图（图纸目录、平面、水电、顶面、门窗表与 model.ifc）。",
         "inputSchema": _schema({"out": {"type": "string", "description": "可选：输出目录（缺省 build/demo）"}}),
     },
+    {
+        "name": "render",
+        "description": "在 Blender Cycles 中从 IFC4 渲染各房间角落透视图与 360° 全景图，并生成 Pannellum 全景漫游页。",
+        "inputSchema": _schema({
+            "ifc": {"type": "string", "description": "输入 IFC4 模型路径"},
+            "out": {"type": "string", "description": "输出目录"},
+            "mode": {"type": "string", "enum": ["corner", "pano", "all"], "description": "渲染模式：corner / pano / all（缺省 all）"},
+            "rooms": {"type": "string", "description": "可选：只渲指定房间（房名或房间 id，逗号分隔）"},
+            "samples": {"type": "integer", "description": "可选：角落图 Cycles 采样数"},
+            "pano_samples": {"type": "integer", "description": "可选：全景图 Cycles 采样数"},
+            "size": {"type": "string", "description": "可选：角落图分辨率（如 1600x1000）"},
+            "pano_size": {"type": "string", "description": "可选：全景图分辨率（2:1，如 3072x1536）"},
+            "device": {"type": "string", "enum": ["auto", "optix", "cuda", "cpu"], "description": "Cycles 设备（缺省 auto）"},
+            "assets": {"type": "string", "description": "可选：本地 CC0 贴图与 HDRI 目录"},
+            "pannellum": {"type": "string", "description": "可选：本地 Pannellum 目录（拷入离线使用）"},
+            "save_blend": {"type": "boolean", "description": "是否保存组装后的 scene.blend"},
+            "project": {"type": "string", "description": "可选：全景漫游页标题前缀"},
+        }, ["ifc", "out"]),
+    },
 ]
 
 _TOOL_INDEX = {t["name"]: t for t in TOOLS}
@@ -764,6 +843,7 @@ _HANDLERS = {
     "make_plan_set": _tool_make_plan_set,
     "check_ifc": _tool_check_ifc,
     "make_demo_set": _tool_make_demo_set,
+    "render": _tool_render,
 }
 
 
