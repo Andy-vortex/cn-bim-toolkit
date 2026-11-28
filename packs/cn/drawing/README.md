@@ -24,7 +24,7 @@
 
 ## 怎么接到 Bonsai 上
 
-- **样式表、图框目录和中间文件目录**：写进 IfcProject 的 `BBIM_Documentation` 属性集（`StylesheetPath`、`TitleblocksDir`，以及指到输出目录 `work/` 的 `DrawingsDir`、`SheetsDir`、`LayoutsDir` 等），见 `src/jiazhuang/drawset.py: configure_project`。路径都相对 IFC 所在目录写；约定包和输出不在同一个盘时，`TitleblocksDir` 写绝对路径。
+- **样式表、图框目录和中间文件目录**：写进 IfcProject 的 `BBIM_Documentation` 属性集（`StylesheetPath`、`TitleblocksDir`，以及指到输出目录 `work/` 的 `DrawingsDir`、`SheetsDir`、`LayoutsDir` 等），见 `src/jiazhuang/drawset.py: configure_project`。路径都相对 IFC 所在目录写；约定包和输出不在同一个盘时，将图框文件拷入输出目录 `work/titleblocks/` 后写相对路径。
 - **符号**：做成 IFC 类型（IfcOutletType 等）。类型带两种表达：
   - `Model/Body`：盒子，给三维渲染用。
   - `Plan/Body/PLAN_VIEW` 或 `REFLECTED_PLAN_VIEW`：二维符号。

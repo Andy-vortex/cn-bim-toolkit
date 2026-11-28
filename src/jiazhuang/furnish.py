@@ -333,6 +333,12 @@ def _place(spec: dict, rm: dict, placed: dict, failed: set, later: set) -> dict:
     g = geom(spec["key"], params)
     w, d = g["width"], g["depth"]
     off, gap = num_field(spec, "offset"), num_field(spec, "gap")
+    if rm["poly"].is_empty:
+        raise ValueError("房间轮廓为空")
+    rx0, ry0, rx1, ry1 = rm["poly"].bounds
+    max_span = math.hypot(rx1 - rx0, ry1 - ry0)
+    if not math.isfinite(max_span) or abs(gap) > max_span:
+        raise ValueError(f"gap 超出房间范围（写了 {gap:.0f}，房间对角线约 {max_span:.0f}）")
     if mode == "wall":
         wid = text_field(spec, "wall", "墙边编号")
         W = next((x for x in rm["walls"] if x["id"] == wid), None)

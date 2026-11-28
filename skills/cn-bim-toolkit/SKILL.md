@@ -24,7 +24,7 @@ DXF ──► dxfplan（或 demo_apartment）──► 识别.json
   furnish_context（读墙边 W1..Wn 与门窗）◄────┤
         │
         ▼
-  furnish_place ──► ceiling ──► mep ──► flooring ──► wall ──► make_plan_set ──► check_ifc / render
+  furnish_place ──► ceiling ──► mep ──► flooring ──► wall ──► make_plan_set ──► check_ifc / render ──► build_viewer
 ```
 
 | 阶段 | MCP 工具 | CLI 命令 | 产出 |
@@ -40,6 +40,7 @@ DXF ──► dxfplan（或 demo_apartment）──► 识别.json
 | 建模与出图 | `make_plan_set` | `blender -b --python-exit-code 1 --python scripts/make_plan_set.py -- <识别.json> <输出目录> [选项]` | `model.ifc`、`*.pdf`、`*.png`、`*.xlsx` |
 | 规范自查 | `check_ifc` | `blender -b --python-exit-code 1 --python scripts/check_ifc.py -- <model.ifc> <规则.json> <输出目录> [工程名]` | `*-report.json/html/pdf` |
 | 渲染与全景漫游 | `render` | `blender -b --python-exit-code 1 --python scripts/render.py -- <model.ifc> <输出目录> [--mode all\|corner\|pano]` | `corners/*.png`、`tour/index.html` |
+| 全案预览站 | `build_viewer` | `python scripts/viewer.py build <输出目录> [--sheets …] [--render …]`（浏览用 `serve`） | `index.html`、`project-index.json` |
 | 示例户型一键出图 | `make_demo_set` | `blender -b --python-exit-code 1 --python scripts/make_demo_set.py [-- 输出目录]` | `JZ-00..04`、`model.ifc` |
 
 ### 依赖与过时规则

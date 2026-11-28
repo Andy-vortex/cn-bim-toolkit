@@ -94,7 +94,7 @@ class TestMcpStdioServer(unittest.TestCase):
         p2 = subprocess.run([sys.executable, "scripts/mcp_server.py", "--list-tools"], cwd=str(ROOT), env=env, capture_output=True)
         self.assertEqual(p2.returncode, 0)
         tools = json.loads(p2.stdout.decode("utf-8"))
-        self.assertEqual(len(tools), 14)
+        self.assertEqual(len(tools), 15)
 
     def test_stage_error_handling_and_first_error_line(self):
         sys.path.insert(0, str(SRC))
@@ -132,7 +132,7 @@ class TestMcpStdioServer(unittest.TestCase):
             self.assertEqual(names, {
                 "check_env", "list_packs", "demo_apartment", "dxfplan",
                 "furnish_context", "furnish_place", "ceiling", "mep",
-                "flooring", "wall", "make_plan_set", "check_ifc", "make_demo_set", "render",
+                "flooring", "wall", "make_plan_set", "check_ifc", "make_demo_set", "render", "build_viewer",
             })
 
             # 资源列表与读取 + 路径穿越拦截
@@ -298,6 +298,23 @@ class TestMcpStdioServer(unittest.TestCase):
                 self.assertTrue(is_err)
                 self.assertEqual(rbad_reg["returncode"], 1)
                 self.assertFalse((fl_d / "empty.json").exists())
+
+                # build_viewer：缺少输入源返回退出码 2 且不建目录；给有效目录生成 index.html
+                v_bad_out = t / "viewer_bad"
+                rv_bad, is_err = cli.call_tool("build_viewer", {"out": str(v_bad_out)})
+                self.assertTrue(is_err)
+                self.assertEqual(rv_bad["returncode"], 2)
+                self.assertFalse(v_bad_out.exists())
+
+                fake_sheets = t / "fake_sheets"
+                fake_sheets.mkdir()
+                (fake_sheets / "A-00.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+                v_out = t / "viewer_ok"
+                rv_ok, is_err = cli.call_tool("build_viewer", {"out": str(v_out), "sheets": str(fake_sheets), "title": "测试预览"})
+                self.assertFalse(is_err, rv_ok)
+                self.assertEqual(rv_ok["counts"]["sheets"], 1)
+                self.assertTrue(Path(rv_ok["files"]["index_html"]).is_file())
+                self.assertIn("scripts/viewer.py serve", rv_ok["serve_command"])
             finally:
                 self.assertEqual(cli.close(), 0)
 

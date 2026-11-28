@@ -20,6 +20,7 @@
 | 大样 | — | 未开始 |
 | 规范自查 | `checker.py`，规则包 `packs/cn/rules/` | 可用 |
 | 渲染与漫游 | `render.py`、`tour.py`，约定包 `packs/cn/render/`（Blender Cycles、Pannellum） | 实验 |
+| 全案预览站 | `viewer.py`（纯标准库静态总览页 + 只读本地 HTTP 服务） | 实验 |
 | agent 接口 | `mcp_server.py`，技能 `skills/cn-bim-toolkit/` | 实验 |
 
 ## 环境
@@ -146,12 +147,23 @@ blender -b --python-exit-code 1 --python scripts/render.py -- build/flooring/she
 - 默认零下载即可运行（程序化 PBR 材质 + Blender 内置 Nishita 物理天空 + 官方 Pannellum CDN）；传入 `--assets <目录>`（或环境变量 `JZ_RENDER_ASSETS`）自动升级本地 CC0 贴图与 HDRI，传入 `--pannellum <目录>`（或 `JZ_PANNELLUM`）自动离线打包 Pannellum。详见 [packs/cn/render](packs/cn/render/README.md)。
 - 输出 `corners/*.png`、`panos/*.png`、`tour/index.html`、`tour/tour.json`、`tour/img/*.jpg` 与 `render-manifest.json`。
 
+## 全案预览站
+
+纯 Python 标准库提供一站式交付预览（不修改源目录，无需前端构建或额外依赖），将全套施工图（含灯箱缩放、PDF 直达）、规范自查报告（六种结论原样透传）、明细表、`model.ifc`、角落效果图与 360° 全景漫游聚合到同一页面：
+
+```bash
+python scripts/viewer.py serve --sheets build/flooring/sheets --render build/render/demo
+python scripts/viewer.py build build/viewer/demo --sheets build/flooring/sheets --render build/render/demo
+```
+
+- `serve` 默认只监听 `127.0.0.1:8765`（局域网手机浏览器看全景漫游可加 `--host 0.0.0.0`，启动自动打开浏览器可加 `--open`），严格限制只读访问传入目录内部文件。
+
 ## agent 接口（MCP 与技能）
 
 仓库提供纯标准库的 MCP stdio 服务（无需额外依赖）与跨 agent 技能说明（[skills/cn-bim-toolkit/SKILL.md](skills/cn-bim-toolkit/SKILL.md)）：
 
-- 启动服务：`python scripts/mcp_server.py`（按行 JSON-RPC 2.0；`--check` 查本地环境，`--list-tools` 列出全部 14 个工具）。
-- 工具一一对应各命令行脚本（`dxfplan`、`demo_apartment`、`furnish_context`、`furnish_place`、`ceiling`、`mep`、`flooring`、`wall`、`make_plan_set`、`check_ifc`、`make_demo_set`、`render`）外加 `check_env`、`list_packs`；`packs/cn/` 下的规则表、示例意图和 README 同时作为 MCP 资源（`cn-bim://pack/...`）开放只读访问。
+- 启动服务：`python scripts/mcp_server.py`（按行 JSON-RPC 2.0；`--check` 查本地环境，`--list-tools` 列出全部 15 个工具）。
+- 工具一一对应各命令行脚本（`dxfplan`、`demo_apartment`、`furnish_context`、`furnish_place`、`ceiling`、`mep`、`flooring`、`wall`、`make_plan_set`、`check_ifc`、`make_demo_set`、`render`、`build_viewer`）外加 `check_env`、`list_packs`；`packs/cn/` 下的规则表、示例意图和 README 同时作为 MCP 资源（`cn-bim://pack/...`）开放只读访问。
 - 在 MCP 客户端配置（如 `.mcp.json`）中接入：
 
 ```json

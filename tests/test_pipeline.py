@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -18,7 +19,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from jiazhuang import conventions, scheme, unitview  # noqa: E402
+from jiazhuang import ceiling, conventions, demo_apartment, flooring, furnish, mep, scheme, unitview, wall  # noqa: E402
 
 
 def _run(*args: str, env_extra: dict[str, str] | None = None) -> tuple[int, str, str]:
@@ -209,6 +210,59 @@ class TestSyntheticFloorRecognition(unittest.TestCase):
             self.assertEqual(rc, 1, out)
             self.assertIn("check --region", last)
             self.assertFalse(empty_rec.exists())
+
+
+class TestRotatedAndIntentEdges(unittest.TestCase):
+    def test_rotated_30deg_width300_ceiling_mep_zero_false_positive(self):
+        rec = demo_apartment.recognition()
+        ang = math.radians(30.0)
+        ca, sa = math.cos(ang), math.sin(ang)
+
+        def rot(pt):
+            return [round(pt[0] * ca - pt[1] * sa, 3), round(pt[0] * sa + pt[1] * ca, 3)]
+
+        for r in rec["rooms"]:
+            r["polygon"] = [rot(p) for p in r["polygon"]]
+            if r.get("label_pt"):
+                r["label_pt"] = rot(r["label_pt"])
+        for w in rec["walls"]:
+            w["polygon"] = [rot(p) for p in w["polygon"]]
+        for o in rec["openings"]:
+            if "x" in o and "y" in o:
+                o["x"], o["y"] = rot([o["x"], o["y"]])
+            if o.get("polygon"):
+                o["polygon"] = [rot(p) for p in o["polygon"]]
+            if o.get("rot") is not None:
+                o["rot"] = round((o["rot"] + 30.0) % 360.0, 3)
+        if rec.get("footprint"):
+            rec["footprint"] = [[rot(p) for p in ring] for ring in rec["footprint"]]
+
+        intent = json.loads((ROOT / "packs/cn/furniture/example-intent.json").read_text(encoding="utf-8"))
+        sch, frep = furnish.furnish(rec, scheme.from_recognition(rec), intent)
+        self.assertTrue(frep["ok"], frep)
+        # width=300 边吊使筒灯中线距墙正好 150.0mm（等于 wall_min），旋转 30° 后不应因浮点舍入误报
+        sch, crep = ceiling.ceiling(rec, sch, {"rooms": [{"room": "R1", "ceiling": "边吊", "width": 300}]})
+        self.assertTrue(crep["ok"], crep)
+        sch, mrep = mep.mep(rec, sch)
+        self.assertTrue(mrep["ok"], mrep["violations"])
+        self.assertGreater(sum(1 for it in sch["items"] if it.get("key") == "cn_downlight"), 0)
+        sch, flrep = flooring.flooring(rec, sch)
+        self.assertTrue(flrep["ok"], flrep)
+        sch, wrep = wall.walls(rec, sch)
+        self.assertTrue(wrep["ok"], wrep)
+
+    def test_furnish_absurd_gap_reports_intent_error(self):
+        rec = demo_apartment.recognition()
+        sch0 = scheme.from_recognition(rec)
+        _, rep = furnish.furnish(
+            rec,
+            sch0,
+            {"rooms": [{"room": "客厅", "items": [
+                {"id": "sofa", "key": "cn_sofa", "wall": "W3", "align": "center", "gap": 50000},
+            ]}]},
+        )
+        self.assertFalse(rep["ok"])
+        self.assertTrue(any("gap 超出房间范围" in e["msg"] for e in rep["errors"]), rep)
 
 
 if __name__ == "__main__":

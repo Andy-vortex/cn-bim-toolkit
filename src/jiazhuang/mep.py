@@ -1343,7 +1343,7 @@ def validate(items: list, rec: dict, sch: dict | None = None, units=None) -> lis
             for f in rm["furn"]:
                 if f["key"] in wet and (d := furnish.footprint(f).distance(p)) < LIMITS["shower_clear"]:
                     add(rm, name, "near_shower", d, "mm", f"离{f['name']}只有 {d:.0f}，不到 {LIMITS['shower_clear']}", f.get("plan_id") or f["name"])
-    C = LIMITS["ceiling_lights"]
+    C, tol_c = LIMITS["ceiling_lights"], 0.5   # 0.5mm 吸收 0.1mm 坐标落盘舍入与斜向房间浮点误差
     for it in pts:   # 筒灯、灯带（只在有吊顶的方案里有）
         t, rm = point_type(it), by.get(it["room"])
         if t not in GROUPED or rm is None:
@@ -1357,19 +1357,19 @@ def validate(items: list, rec: dict, sch: dict | None = None, units=None) -> lis
             continue
         cur, R = g(("窗帘盒",)), Polygon([w["a"] for w in rm["walls"]]).buffer(0)
         others = [o for o in pts if o["room"] == it["room"] and kind_of(o) == "light" and point_type(o) not in GROUPED]
-        if not any(Polygon(b["polygon"], b.get("holes") or []).buffer(-C["radius"]).contains(p) for b in bl if b["part"] != "窗帘盒"):
+        if not any(Polygon(b["polygon"], b.get("holes") or []).buffer(-(C["radius"] - tol_c)).contains(p) for b in bl if b["part"] != "窗帘盒"):
             add(rm, name, "ceiling_light", 0, "mm", "不在一块吊顶里，或压到跌级线（灯边离吊顶块的边不到半个灯宽）")
-        elif (d := R.exterior.distance(p)) < C["wall_min"]:
+        elif (d := R.exterior.distance(p)) < C["wall_min"] - tol_c:
             add(rm, name, "ceiling_light", d, "mm", f"离墙 {d:.0f}，不到 {C['wall_min']}")
-        elif not cur.is_empty and (d := cur.distance(p)) < C["curtain_clear"]:
+        elif not cur.is_empty and (d := cur.distance(p)) < C["curtain_clear"] - tol_c:
             add(rm, name, "ceiling_light", d, "mm", f"离窗帘盒 {d:.0f}，不到 {C['curtain_clear']}")
-        elif (o := next((o for o in others if Point(o["x"], o["y"]).distance(p) < C["light_clear"]), None)):
+        elif (o := next((o for o in others if Point(o["x"], o["y"]).distance(p) < C["light_clear"] - tol_c), None)):
             d = Point(o["x"], o["y"]).distance(p)
             add(rm, name, "ceiling_light", d, "mm", f"离{o['name']} {d:.0f}，不到 {C['light_clear']}", o.get("plan_id") or o["name"])
     downs = [it for it in pts if point_type(it) == "downlight" and it["room"] in by]
     for i, it in enumerate(downs):   # 两盏筒灯中心距不到 spacing_min
         for o in downs[:i]:
-            if o["room"] == it["room"] and (d := math.hypot(it["x"] - o["x"], it["y"] - o["y"])) < C["spacing_min"]:
+            if o["room"] == it["room"] and (d := math.hypot(it["x"] - o["x"], it["y"] - o["y"])) < C["spacing_min"] - tol_c:
                 add(by[it["room"]], it["plan_id"], "ceiling_light", d, "mm", f"离{o['plan_id']} 中心距 {d:.0f}，不到 {C['spacing_min']}", o["plan_id"])
     for rm in E["rooms"]:
         need = room_rules(rm["type"]).get("min", {}).get("socket") if not units or rm["unit"] in units else None

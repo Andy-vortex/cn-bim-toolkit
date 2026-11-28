@@ -608,6 +608,53 @@ def _tool_make_demo_set(args: dict[str, Any]) -> dict[str, Any]:
     return res
 
 
+def _tool_build_viewer(args: dict[str, Any]) -> dict[str, Any]:
+    cmd = [sys.executable, str(ROOT / "scripts" / "viewer.py"), "build", args["out"]]
+    if "sheets" in args and args["sheets"] is not None:
+        cmd.extend(["--sheets", str(args["sheets"])])
+    if "render" in args and args["render"] is not None:
+        cmd.extend(["--render", str(args["render"])])
+    if args.get("title"):
+        cmd.extend(["--title", str(args["title"])])
+    rc, stdout, stderr, jzlog = _run_cmd(cmd)
+    out_p = _resolve_path(args["out"])
+    if rc != 0:
+        return {"ok": False, "returncode": rc, "jzlog": jzlog, "output": str(out_p), "files": {}, "error": _first_error_line(stderr, stdout)}
+    idx_p = out_p / "project-index.json"
+    html_p = out_p / "index.html"
+    idx = _read_json_if_exists(idx_p) if idx_p.is_file() else None
+    serve_parts = ["python", "scripts/viewer.py", "serve"]
+    _meta = set('&()|;$"<>\x27')
+    q = lambda s: f'"{s.replace(chr(34), chr(92) + chr(34))}"' if any(c.isspace() or c in _meta for c in s) else s
+    if args.get("sheets"):
+        serve_parts.extend(["--sheets", q(str(_resolve_path(args["sheets"])))])
+    if args.get("render"):
+        serve_parts.extend(["--render", q(str(_resolve_path(args["render"])))])
+    if args.get("title"):
+        serve_parts.extend(["--title", q(str(args["title"]))])
+    reports = []
+    if isinstance(idx, dict) and isinstance(idx.get("sheets"), dict):
+        reports = [
+            {"name": r.get("name"), "counts": r.get("counts"), "total": r.get("total")}
+            for r in idx["sheets"].get("reports", [])
+            if isinstance(r, dict)
+        ]
+    return {
+        "ok": True,
+        "returncode": rc,
+        "jzlog": jzlog,
+        "output": str(out_p),
+        "files": {
+            "index_html": str(html_p) if html_p.is_file() else None,
+            "index_json": str(idx_p) if idx_p.is_file() else None,
+        },
+        "counts": idx.get("counts", {}) if isinstance(idx, dict) else {},
+        "verdict_totals": idx.get("verdict_totals", {}) if isinstance(idx, dict) else {},
+        "reports": reports,
+        "serve_command": " ".join(serve_parts),
+    }
+
+
 def _tool_render(args: dict[str, Any]) -> dict[str, Any]:
     blender = find_blender()
     if not blender:
@@ -826,6 +873,16 @@ TOOLS: list[dict[str, Any]] = [
             "project": {"type": "string", "description": "可选：全景漫游页标题前缀"},
         }, ["ifc", "out"]),
     },
+    {
+        "name": "build_viewer",
+        "description": "汇总施工图与渲染漫游目录生成零依赖全案预览页（index.html + project-index.json），并返回本地只读浏览命令。",
+        "inputSchema": _schema({
+            "out": {"type": "string", "description": "输出目录"},
+            "sheets": {"type": "string", "description": "可选：施工图输出目录（与 render 至少给一个）"},
+            "render": {"type": "string", "description": "可选：Cycles 渲染与漫游输出目录（与 sheets 至少给一个）"},
+            "title": {"type": "string", "description": "可选：预览页标题"},
+        }, ["out"]),
+    },
 ]
 
 _TOOL_INDEX = {t["name"]: t for t in TOOLS}
@@ -844,6 +901,7 @@ _HANDLERS = {
     "check_ifc": _tool_check_ifc,
     "make_demo_set": _tool_make_demo_set,
     "render": _tool_render,
+    "build_viewer": _tool_build_viewer,
 }
 
 
